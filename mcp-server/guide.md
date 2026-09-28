@@ -36,6 +36,7 @@ Kerf is a CAD-style editor for CNC-cut parts: flat parts cut from sheet material
    - notes: `arrange_parts(notes=[...])` writes the cut order, hardware list and assembly/safety notes under the sheets;
    - `save_document` with a file name;
    - tell the user the share link, `<editor>/?open=<file>` (add `&view=3d` for the 3D view).
+   - for the machine: `export_sheets` writes one SVG + DXF per sheet (the SHEETS layer rects, corner at 0,0): one job per blank. Scripts that lay parts out on their own blanks draw them as rects on a SHEETS layer so this works (and check_cnc checks parts are on them). `export_parts` is for nesting software.
 
 When the user pastes a Kerf link (`…/?open=<file>`), call `open_document` with it: that switches to the tab (or opens it).
 

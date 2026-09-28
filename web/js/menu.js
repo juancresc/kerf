@@ -92,6 +92,7 @@ const MENUS = [
     ['# For the CNC'],
     ['CNC file — SVG (mm)', actions.exportCnc, MOD + 'E'],
     ['CNC file — DXF (mm)', actions.exportDxf, SHIFT + MOD + 'E'],
+    ['One file per sheet — SVG + DXF (zip, one machine job each)', actions.exportSheets],
     ['Parts for nesting — SVG + DXF per entity (zip)', actions.exportParts],
     '-',
     ['# 3D (the assembled model)'],

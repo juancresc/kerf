@@ -40,7 +40,8 @@ mcp-server/
                radius per corner, fillet / dog-bone of an existing shape (keeps its other arcs); uses
                kerf_script.build()/to_path().
   export.py    SVG geometry → DXF (ezdxf; LWPOLYLINE with arc bulges, CIRCLE), DXF → SVG import,
-               per-entity part files + zip (nesting software), bounding boxes.
+               per-entity part files + zip (nesting software), one file per sheet (SHEETS layer rects,
+               corner at 0,0 = one machine job) + zip, bounding boxes.
   server.py    MCP tools + HTTP API (aiohttp) — thin wrappers over Store.
   kerf_script.py  stdlib-only helpers for parametric generator scripts: Drawing (whole project as one
                batch: parts, 3D placement, expect() world-box checks, arrange, run() CLI), HTTP calls,
@@ -110,7 +111,7 @@ The compose file publishes both ports on 127.0.0.1 only. The `local_only` middle
 - **State:** `GET /api/state[?since=V&instance=I]` (long-poll).
 - **Editing:** `POST /api/ops {ops,label}` · `POST /api/undo|redo`.
 - **Files and tabs:** `POST /api/file/new|open|close|activate|revert|save|saved-local|mkdir|delete|import` (import takes `svg | dxf (base64) | project`) · `GET /api/files` · `GET /api/browse?folder=`.
-- **Exports:** `GET /api/export/{cnc|cnc-dxf|parts|file|project}`.
+- **Exports:** `GET /api/export/{cnc|cnc-dxf|parts|sheets|file|project}`.
 - **Scripts:** `GET /api/script` (kerf_script.py) · `GET /api/check?tab=` (check_cnc for any tab) · `GET /api/assembly?tab=` (describe_assembly). `add_layer` takes `exist_ok` (update instead of failing) so generators can re-run.
 - **Other:** `POST /api/selection` · `POST /api/screenshot` · `GET /api/background` · `GET /api/guide`.
 
@@ -126,7 +127,7 @@ The server also sends workflow instructions to the client (`INSTRUCTIONS` in ser
 - **Sheets:** `arrange_parts` (pack pieces onto sheets, SHEETS layer, notes block; 3D unchanged)
 - **Layers:** `list_layers, add_layer, update_layer, remove_layer, move_layer` (with `depth` for pockets)
 - **Measure/selection:** `measure, add_dimension, get_selection, set_selection`
-- **Import/export:** `import_dxf, export_cnc` (svg|dxf), `export_svg, export_parts`
+- **Import/export:** `import_dxf, export_cnc` (svg|dxf), `export_svg, export_parts, export_sheets` (one file per sheet)
 - **Power tools:** `apply_ops` (any ops, one call, one undo step, `"as"`/`$name` references), `find_elements` (by layer/tag/entity/area), `describe_entity` (bounds, hole sizes, layers, world box), `check_cnc` (open contours, holes smaller than the tool, duplicates, text on cut layers, parts bigger than the sheet, overlapping/too close/off-sheet parts, warnings for parts not in 3D, …)
 - Tool arguments take real JSON (objects, id lists); JSON strings and comma-separated ids still work.
 - **Preview:** `take_screenshot(view="2d"|"3d"|"3d-exploded")` (async; needs the editor open in a browser), `set_background_image, remove_background_image`
@@ -137,7 +138,7 @@ The server also sends workflow instructions to the client (`INSTRUCTIONS` in ser
 2. Use layers, not colours: outlines → CUT_OUTSIDE, holes/slots → CUT_INSIDE, pockets → a layer with `depth`, labels/dimensions → NOTES, bought parts → a non-export layer.
 3. Build each part with one `apply_ops` batch (shapes + `group` via `"as"`/`$name`, `fill="none"`, then `update_group` with `qty` and `assembly {rotation, position}`), so part exports and the 3D preview work. Big or parametric designs: a kerf_script `Drawing` script.
 4. `arrange_parts` onto the sheets.
-5. `check_cnc` and `describe_assembly`, then `take_screenshot` (2d and 3d). `save_document` writes the .kerf. Use `export_cnc(format="dxf")` / `export_parts` for the shop.
+5. `check_cnc` and `describe_assembly`, then `take_screenshot` (2d and 3d). `save_document` writes the .kerf. Use `export_sheets` (one file per sheet = one job on the machine) or `export_parts` (nesting software) for the shop.
 
 ## SVG/DXF for CNC guidelines
 - 1 unit = 1 mm; exports carry mm units. Don't scale in CAM.

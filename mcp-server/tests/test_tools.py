@@ -42,6 +42,9 @@ def test_part_workflow(srv, tmp_path):
     parts = j(srv.export_parts())
     assert sorted(parts["files"]) == ["rail-copy_x1.dxf", "rail-copy_x1.svg", "rail_x2.dxf", "rail_x2.svg"]
     assert (tmp_path / parts["zip"]).exists()
+    j(srv.arrange_parts(sheet_width=600, sheet_height=400))
+    sheets = j(srv.export_sheets())
+    assert sheets["sheets"][0]["file"] == "sheet-1_600x400" and (tmp_path / sheets["zip"]).exists()
 
     dim = j(srv.add_dimension(0, 0, 100, 0, offset=10))
     assert dim["length"] == 100

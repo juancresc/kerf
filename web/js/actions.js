@@ -395,6 +395,15 @@ export async function exportParts() {
   toast(`Parts: ${tops.map(g => `${g.name} ×${g.qty}`).join(', ')} — SVG + DXF each`);
 }
 
+export async function exportSheets() {
+  const sheets = app.doc.elements.filter(e => e.layer === 'SHEETS' && e.tag === 'rect');
+  if (!sheets.length) {
+    return modal({ title: 'No sheets yet', html: '<p>A file per sheet needs the stock drawn as sheets: ask Claude to arrange the parts on sheets (<code>arrange_parts</code>), or draw each sheet as a rectangle on the <b>SHEETS</b> layer. Each file then holds the parts on one sheet, with its corner at 0,0.</p>' });
+  }
+  window.location.href = '/api/export/sheets';
+  toast(`${sheets.length} sheet${sheets.length > 1 ? 's' : ''}: one SVG + DXF each, corner at 0,0 (see README.txt)`);
+}
+
 export function downloadSvg() {
   window.location.href = '/api/export/file';
 }

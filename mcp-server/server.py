@@ -20,7 +20,7 @@ from aiohttp import web
 from mcp.server.fastmcp import FastMCP, Image
 
 from document import DocError, LINE_STYLES
-from export import cnc_dxf, dxf_to_svg, parts_zip, part_files, bbox, parse_transform
+from export import cnc_dxf, dxf_to_svg, parts_zip, part_files, sheet_files, sheets_zip, bbox, parse_transform
 from store import Store
 import layout
 from layout import move_attrs
@@ -299,6 +299,25 @@ def export_parts() -> str:
         zpath = store.resolve(f"exports/{store.display_name()}-parts", ext=".zip")
         zpath.write_bytes(parts_zip(store.doc))
     return json.dumps({"folder": store.rel(folder), "zip": store.rel(zpath), "files": [n for n, _ in files]})
+
+
+@tool
+def export_sheets() -> str:
+    """One file per stock sheet (rects on the SHEETS layer: arrange_parts draws them, or a script
+    does): 'sheet-<n>_<w>x<h>.svg' and '.dxf', cut layers only, with the sheet's corner at 0,0, so
+    each file is one job on the machine. Written to data/exports/<doc>-sheets/ plus a zip with a
+    README listing the parts on each sheet. `sheets` in the result also lists shapes on no sheet."""
+    with store.lock:
+        files, sheets = sheet_files(store.doc)
+        folder = store.resolve(f"exports/{store.display_name()}-sheets", ext="")
+        folder.mkdir(parents=True, exist_ok=True)
+        for old in folder.glob("sheet-*"):
+            old.unlink()
+        for name, data in files:
+            (folder / name).write_bytes(data)
+        zpath = store.resolve(f"exports/{store.display_name()}-sheets", ext=".zip")
+        zpath.write_bytes(sheets_zip(store.doc))
+    return json.dumps({"folder": store.rel(folder), "zip": store.rel(zpath), "sheets": sheets})
 
 
 @tool
@@ -968,7 +987,9 @@ def prepare_for_cutting() -> str:
             "1. check_cnc and fix every issue (set_selection to show the user what you change).\n"
             "2. Every part is an entity with the right qty (describe_entity / update_group).\n"
             "3. Material, thickness, sheet size and tool diameter are set (set_material).\n"
-            "4. save_document, then export_cnc(format='dxf') and export_parts; report the files.")
+            "4. arrange_parts (or the script's sheets) so every part is on a sheet of the SHEETS layer.\n"
+            "5. save_document, then export_sheets (one file per sheet = one machine job; add export_parts\n"
+            "   for nesting software); report the files.")
 
 
 # ── MCP: layers ────────────────────────────────────────────
@@ -1223,6 +1244,8 @@ async def get_export(request):
             body, fname, ctype = cnc_dxf(store.doc), f"{name}-cnc.dxf", "application/dxf"
         elif kind == "parts":
             body, fname, ctype = parts_zip(store.doc), f"{name}-parts.zip", "application/zip"
+        elif kind == "sheets":
+            body, fname, ctype = sheets_zip(store.doc), f"{name}-sheets.zip", "application/zip"
         elif kind == "file":
             body, fname, ctype = store.doc.to_svg("file").encode(), f"{name}.svg", "image/svg+xml"
         elif kind == "project":

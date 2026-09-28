@@ -1,4 +1,4 @@
-"""Exports: DXF (CNC), per-entity part files for nesting software, geometry helpers.
+"""Exports: DXF (CNC), per-entity part files for nesting software, one file per sheet, geometry helpers.
 
 SVG geometry (paths with lines/arcs/curves, basic shapes, transforms) is converted to
 absolute outlines in document mm. DXF output uses Y up (DXF convention), mm units, one DXF
@@ -466,6 +466,83 @@ def parts_zip(doc: Document) -> bytes:
         z.writestr("README.txt", "One file per part (SVG and DXF, mm, cut layers only).\n"
                    "The _xN suffix is the quantity to cut. Load them into nesting software\n"
                    "(e.g. Deepnest, SVGnest) to pack them on your sheets.\n\n" + "\n".join(names))
+    return buf.getvalue()
+
+
+# ── Sheets → one file per sheet (what goes on the machine as one job) ─────
+
+SHEETS_LAYER = "SHEETS"
+
+
+def sheet_rects(doc: Document) -> list[tuple[float, float, float, float]]:
+    """The stock sheets: rects on the SHEETS layer (arrange_parts draws them), in drawing order."""
+    out = []
+    for e in doc.elements:
+        if e.layer == SHEETS_LAYER and e.tag == "rect":
+            x0, y0, x1, y1 = bbox([e])
+            out.append((x0, y0, x1 - x0, y1 - y0))
+    return out
+
+
+def sheet_files(doc: Document) -> tuple[list[tuple[str, bytes]], list[dict]]:
+    """For each sheet: 'sheet-<n>_<w>x<h>.svg' and '.dxf' holding the cut shapes that lie on it,
+    with the sheet's corner at 0,0 (SVG: top-left; DXF: bottom-left, y up). Returns the files and
+    a summary per sheet (file stem, size, part names). Shapes on no sheet are listed as 'off_sheet'."""
+    rects = sheet_rects(doc)
+    if not rects:
+        raise DocError("No sheets: run arrange_parts, or draw the stock as rectangles on the SHEETS layer")
+    layers = {l.name: l for l in doc.layers}
+    groups = {g.id: g for g in doc.groups}
+
+    def part_name(e):
+        g = groups.get(e.group)
+        while g and g.parent in groups:
+            g = groups[g.parent]
+        return g.name if g else "loose shapes"
+
+    placed, files, sheets = set(), [], []
+    els = cnc_elements(doc)
+    for n, (sx, sy, sw, sh) in enumerate(rects, 1):
+        on = []
+        for e in els:
+            b = bbox([e])
+            if b and b[0] >= sx - 0.01 and b[1] >= sy - 0.01 and b[2] <= sx + sw + 0.01 and b[3] <= sy + sh + 0.01:
+                on.append(e)
+        placed.update(e.id for e in on)
+        stem = f"sheet-{n}_{sw:g}x{sh:g}"
+        sheets.append({"sheet": n, "file": stem, "size": [round(sw, 3), round(sh, 3)],
+                       "parts": list(dict.fromkeys(part_name(e) for e in on))})
+        if not on:
+            continue
+        body = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{sw:.3f}mm" height="{sh:.3f}mm" '
+                f'viewBox="0 0 {sw:.3f} {sh:.3f}">', f'<g transform="translate({-sx:.3f}, {-sy:.3f})">']
+        body += [element_svg(e, layers[e.layer], with_id=False) for e in on]
+        body += ["</g>", "</svg>"]
+        files.append((f"{stem}.svg", "\n".join(body).encode("utf-8")))
+        files.append((f"{stem}.dxf", dxf_bytes(doc, on, sw, doc.height, offset=(sx, -(doc.height - (sy + sh))))))
+    off = [e for e in els if e.id not in placed]
+    if off:
+        sheets.append({"off_sheet": list(dict.fromkeys(part_name(e) for e in off))})
+    return files, sheets
+
+
+def sheets_zip(doc: Document) -> bytes:
+    files, sheets = sheet_files(doc)
+    lines = []
+    for s in sheets:
+        if "off_sheet" in s:
+            lines.append("NOT ON ANY SHEET (not exported): " + ", ".join(s["off_sheet"]))
+        else:
+            w, h = s["size"]
+            lines.append(f"{s['file']}  ({w:g} x {h:g} mm): " + (", ".join(s["parts"]) or "empty, no file"))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for name, data in files:
+            z.writestr(name, data)
+        z.writestr("README.txt", "One file per sheet (SVG and DXF, mm, cut layers only): one job on the machine.\n"
+                   "0,0 is the sheet's corner (DXF: bottom-left). Layers: POCKET/pockets first, then\n"
+                   "CUT_INSIDE (inside the line), then CUT_OUTSIDE (outside the line, with tabs).\n\n"
+                   + "\n".join(lines) + "\n")
     return buf.getvalue()
 
 

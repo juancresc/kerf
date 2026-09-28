@@ -1,3 +1,4 @@
+import io
 import json
 import re
 
@@ -325,6 +326,35 @@ def test_parts_export_per_entity(store):
     assert set(files) == {"rail_x4.svg", "rail_x4.dxf"}
     svg = files["rail_x4.svg"].decode()
     assert 'width="100.000mm"' in svg and "translate(-500.000, -300.000)" in svg and "label" not in svg
+
+
+def test_sheet_export_one_file_per_sheet(store):
+    from export import sheet_files, sheets_zip
+    import ezdxf, ezdxf.bbox, zipfile
+    parts = []
+    for i, w in enumerate((300, 260)):
+        a, b = store.apply([{"op": "add_element", "tag": "rect", "layer": "CUT_OUTSIDE",
+                             "attrs": {"x": 50 + 400 * i, "y": 50, "width": w, "height": 150}},
+                            {"op": "add_element", "tag": "circle", "layer": "CUT_INSIDE",
+                             "attrs": {"cx": 100 + 400 * i, "cy": 100, "r": 5}}])
+        parts += store.apply([{"op": "group", "items": [a, b], "name": f"Part {i + 1}"}])
+    with pytest.raises(DocError, match="No sheets"):
+        sheet_files(store.doc)
+    store.apply([{"op": "arrange", "sheet_width": 400, "sheet_height": 300, "margin": 10, "gap": 10}])
+    files, sheets = sheet_files(store.doc)
+    assert [s["file"] for s in sheets] == ["sheet-1_400x300", "sheet-2_400x300"]
+    assert [s["parts"] for s in sheets] == [["Part 1"], ["Part 2"]]          # one part per sheet
+    names = {n for n, _ in files}
+    assert names == {"sheet-1_400x300.svg", "sheet-1_400x300.dxf", "sheet-2_400x300.svg", "sheet-2_400x300.dxf"}
+    svg = dict(files)["sheet-1_400x300.svg"].decode()
+    assert 'width="400.000mm"' in svg and 'viewBox="0 0 400.000 300.000"' in svg and "SHEET" not in svg
+    # DXF: the sheet's bottom-left corner is 0,0 and every shape lies on the sheet
+    dx = ezdxf.read(io.StringIO(dict(files)["sheet-1_400x300.dxf"].decode()))
+    ext = ezdxf.bbox.extents(dx.modelspace())
+    assert ext.extmin.x >= 0 and ext.extmin.y >= 0 and ext.extmax.x <= 400 and ext.extmax.y <= 300
+    assert {e.dxf.layer for e in dx.modelspace()} == {"CUT_OUTSIDE", "CUT_INSIDE"}
+    readme = zipfile.ZipFile(io.BytesIO(sheets_zip(store.doc))).read("README.txt").decode()
+    assert "sheet-2_400x300" in readme and "Part 2" in readme
 
 
 def test_native_project_keeps_everything_and_svg_opens_as_new_tab(store, tmp_path):
