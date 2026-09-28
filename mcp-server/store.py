@@ -19,6 +19,7 @@ from pathlib import Path
 
 from document import Document, DocError, to_native, from_native, clean_material, clean_title
 import layout
+import shapes
 
 NATIVE_EXT = ".kerf"
 LEGACY_EXT = ".svgcnc"      # early name of the project format; still opens
@@ -546,9 +547,25 @@ def apply_op(doc: Document, op: dict):
     kind = op.get("op")
     if kind == "add_element":
         return doc.add_element(op["tag"], op.get("attrs") or {}, op.get("text", ""), op.get("layer"),
-                               op.get("group")).id
+                               op.get("group"), op.get("name", "")).id
+    if kind in ("add_slot", "add_rounded_rect", "add_outline"):
+        d = (shapes.slot_d(op.get("x1"), op.get("y1"), op.get("x2"), op.get("y2"), op.get("width"))
+             if kind == "add_slot" else
+             shapes.rounded_rect_d(op.get("x"), op.get("y"), op.get("width"), op.get("height"), op.get("r", 0))
+             if kind == "add_rounded_rect" else shapes.outline_d(op.get("points")))
+        return doc.add_element("path", {"d": d, "fill": "none"}, "", op.get("layer"), op.get("group")).id
+    if kind in ("fillet", "dogbone"):         # rebuilt in place: same id, becomes a path
+        el = doc.element(op["id"])
+        tol = shapes.num(op.get("tol", 5), "tol", True)
+        if kind == "fillet":
+            attrs = shapes.fillet_attrs(el, op.get("r"), op.get("corners"), tol)
+        else:
+            tool_d = op.get("tool_d") or (doc.material or {}).get("tool_diameter") or 6
+            attrs = shapes.dogbone_attrs(el, tool_d, op.get("corners", "auto"), tol)
+        el.tag, el.attrs = "path", attrs
+        return el.id
     if kind == "update_element":
-        return doc.update_element(op["id"], op.get("attrs"), op.get("text"), op.get("layer")).id
+        return doc.update_element(op["id"], op.get("attrs"), op.get("text"), op.get("layer"), op.get("name")).id
     if kind == "remove_elements":
         return doc.remove_elements(op["ids"])
     if kind == "reorder_element":
@@ -652,7 +669,8 @@ def resolve_refs(op: dict, results: list, names: dict | None = None):
 
 
 def describe(ops: list[dict]) -> str:
-    names = {"add_element": "Add", "update_element": "Edit", "remove_elements": "Delete",
+    names = {"add_element": "Add", "add_slot": "Add slot", "add_rounded_rect": "Add rounded rectangle",
+             "add_outline": "Add outline", "fillet": "Fillet", "dogbone": "Dog-bones", "update_element": "Edit", "remove_elements": "Delete",
              "reorder_element": "Reorder", "add_layer": "Add layer", "update_layer": "Edit layer",
              "remove_layer": "Delete layer", "move_layer": "Move layer", "set_size": "Resize document",
              "set_background": "Background", "set_background_opacity": "Background opacity",
@@ -677,7 +695,8 @@ def coalesce_key(ops: list[dict]) -> str | None:
                                              "set_background_opacity", "set_material"):
         op = ops[0]
         return f'{op["op"]}:{op.get("id") or op.get("name")}:{",".join(sorted((op.get("attrs") or {}).keys()))}' \
-               f':{op.get("text") is not None}:{op.get("coalesce", "")}'
+               f':{op.get("text") is not None}:{op["op"] == "update_element" and op.get("name") is not None}' \
+               f':{op.get("coalesce", "")}'
     return None
 
 

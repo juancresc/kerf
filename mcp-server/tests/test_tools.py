@@ -144,3 +144,54 @@ def test_open_document_accepts_links(srv, tmp_path):
     srv.store.save("shared/part")
     j(srv.open_document("http://localhost:8765/?open=shared/part.kerf"))
     assert srv.store.file == "shared/part.kerf"
+
+
+def test_element_names(srv):
+    a = j(srv.add_element("circle", {"cx": 10, "cy": 10, "r": 4}, layer="CUT_INSIDE", name="Hinge hole"))["id"]
+    j(srv.add_element("circle", {"cx": 30, "cy": 10, "r": 4}, layer="CUT_INSIDE"))
+    assert [e["id"] for e in j(srv.find_elements(name="hinge"))["elements"]] == [a]
+    assert j(srv.update_element(a, name="Pivot"))["name"] == "Pivot"
+    els = j(srv.list_elements())["elements"]
+    assert els[0]["name"] == "Pivot" and "name" not in els[1]
+    new = j(srv.duplicate(a, 5, 0))["elements"][0]
+    assert j(srv.find_elements(name="pivot"))["count"] == 2 and new != a
+
+
+def test_shape_tools(srv, tmp_path):
+    from export import IDENTITY, path_contours
+    arcs = lambda d: sum(1 for c in path_contours(d, IDENTITY, None) for p in c.pts if abs(p[2]) > 1e-9)
+    el = lambda i: srv.store.doc.element(i)
+
+    s = j(srv.add_slot(20, 20, 80, 20, 9))
+    assert el(s["id"]).layer == "CUT_INSIDE" and arcs(el(s["id"]).attrs["d"]) == 2
+    rr = j(srv.add_rounded_rect(0, 0, 200, 100, 12))["id"]
+    assert el(rr).layer == "CUT_OUTSIDE" and el(rr).attrs["fill"] == "none"
+    o = j(srv.add_outline("[[300, 0], [500, 0, 40], [500, 300], [300, 300, 10]]"))["id"]
+    assert arcs(el(o).attrs["d"]) == 2
+    assert "error" in j(srv.add_outline([[0, 0], [1, 1]]))
+    assert "error" in j(srv.add_outline("[[0, 0"))
+
+    r = j(srv.add_svg('<rect x="600" y="0" width="100" height="50"/>', layer="CUT_OUTSIDE"))["ids"][0]
+    assert j(srv.fillet_corners(r, 8, "[1, 2]"))["id"] == r
+    assert el(r).tag == "path" and arcs(el(r).attrs["d"]) == 2
+    srv.undo()
+    assert el(r).tag == "rect"
+    j(srv.fillet_corners(r, 8, [[700, 50]]))
+    assert arcs(el(r).attrs["d"]) == 1
+    assert "error" in j(srv.fillet_corners(s["id"], 3))       # has arcs already
+
+    h = j(srv.add_svg('<rect x="620" y="10" width="40" height="18"/>', layer="CUT_INSIDE"))["ids"][0]
+    j(srv.add_dogbones(h))                                     # material tool Ø6, all 4 hole corners
+    assert arcs(el(h).attrs["d"]) == 4
+
+    # one batch: slot + outline + group via "$name"
+    res = j(srv.apply_ops([
+        {"op": "add_outline", "as": "o", "layer": "CUT_OUTSIDE", "points": [[0, 400], [300, 400], [300, 600], [0, 600]]},
+        {"op": "add_slot", "as": "s", "layer": "CUT_INSIDE", "x1": 50, "y1": 500, "x2": 200, "y2": 500, "width": 10},
+        {"op": "fillet", "id": "$o", "r": 20},
+        {"op": "group", "items": ["$o", "$s"], "name": "Plate"}]))["results"]
+    assert res[2] == res[0]
+    kinds = {i["kind"] for i in j(srv.check_cnc())["issues"] if i.get("ids") and set(i["ids"]) & {res[0], res[1]}}
+    assert not kinds & {"open_contour", "duplicate", "invalid_geometry"}
+    dxf = j(srv.export_cnc(format="dxf"))
+    assert "error" not in dxf

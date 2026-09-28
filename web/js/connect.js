@@ -56,7 +56,7 @@ Edit — a batch of ops is one undo step; "$0" means the id created by op 0 of t
     {"op":"add_element","tag":"rect","layer":"CUT_OUTSIDE","attrs":{"x":10,"y":10,"width":200,"height":100,"rx":5,"fill":"none"}},
     {"op":"add_element","tag":"circle","layer":"CUT_INSIDE","attrs":{"cx":30,"cy":30,"r":4,"fill":"none"}},
     {"op":"group","items":["$0","$1"],"name":"Plate"}]}'
-Ops: add_element{tag,attrs,layer,text?,group?} · update_element{id,attrs?,text?,layer?} · remove_elements{ids}
+Ops: add_element{tag,attrs,layer,text?,group?,name?} · update_element{id,attrs?,text?,layer?,name?} · remove_elements{ids}
   · group{items,name} · ungroup{id} · update_group{id,name?,qty?,assembly?} · add_layer{name,color,line_style?,export?,depth?}
   · update_layer{name,...} · set_size{width,height} · set_material{material} · set_title{title}
   · set_params{params} · import_svg{svg,layer?} · clear

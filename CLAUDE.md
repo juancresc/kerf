@@ -36,6 +36,9 @@ mcp-server/
   layout.py    parts on the drawing: reposition() (move/transform keeping assembly matrices in sync),
                default_matrix, pieces(), arrange() (MaxRects onto SHEETS), layout_issues (overlap, too
                close, off sheet), assembly_report (world boxes, clashes by sampling part solids).
+  shapes.py    exact shape geometry (lines + arcs) for the shape ops: slot, rounded rect, outline with a
+               radius per corner, fillet / dog-bone of an existing shape (keeps its other arcs); uses
+               kerf_script.build()/to_path().
   export.py    SVG geometry → DXF (ezdxf; LWPOLYLINE with arc bulges, CIRCLE), DXF → SVG import,
                per-entity part files + zip (nesting software), bounding boxes.
   server.py    MCP tools + HTTP API (aiohttp) — thin wrappers over Store.
@@ -52,7 +55,9 @@ web/js/
   api.js       HTTP client; mutations serialized; long-poll sync; background image cache
   geometry.js  layer styling, doc→SVG/PNG, moveAttrs, bboxes
   canvas.js    render, zoom/grid/rulers, tools: select (entities, drill-down, marquee), pan, draw
-               (drag or click–click + typed dimensions), text, measure (snaps) ; selection dims
+               (drag or click–click + typed dimensions; rect radius, slot), outline (click corners),
+               fillet / dog-bone (click a corner, Shift = all), text, measure (snaps); selection dims.
+               Shape tools send the server's shape ops; the browser only previews.
   panels.js    Layers (depth, export, …), Entities tree, Inspector (shape / entity + 3D placement /
                document + Material & stock)
   actions.js   file (tabs, Open/Save As browser, computer files), import/export, edit, entities
@@ -61,6 +66,8 @@ web/js/
   preview3d.js three.js assembly: extrude entities (CUT_OUTSIDE outline, CUT_INSIDE holes,
                pockets from layers with depth), place with assembly, sliders, GLB/STL export
   materials.js material presets
+  textures.js  procedural canvas textures by material type (grain, plywood plies on cut edges, MDF,
+               brushed metal, clear acrylic), mm UVs, Textures toggle in the 3D panel
   main.js      wiring: state → views, status bar, code panel, side panel, selection sync, screenshots
 data/          projects (*.kerf), imports (.svg/.dxf), exports/, .session.json (gitignored)
 ```
@@ -85,6 +92,7 @@ data/          projects (*.kerf), imports (.svg/.dxf), exports/, .session.json (
 ### Store / sync
 - All edits go through `Store.apply(ops)`: the browser always names its tab, and MCP tools use the active tab. Within a batch, `"$n"` in items/id/ids/group/parent refers to the result of op n, and `"$name"` to the op with `"as": "name"`, so a whole part (shapes + group) is one undo step. Errors say which op failed. Ops:
   - elements: `add_element, update_element, remove_elements, reorder_element`;
+  - shapes: `add_slot, add_rounded_rect, add_outline` (new paths), `fillet, dogbone` (rebuild an element in place, same id);
   - layers: `add_layer, update_layer, set_layer_visibility, remove_layer, move_layer`;
   - document: `set_size, set_background(_opacity), clear, replace_svg, import_svg, set_material, set_params`;
   - entities: `group, ungroup, update_group, set_group` (move items into an entity or out of it);
@@ -112,6 +120,7 @@ The server also sends workflow instructions to the client (`INSTRUCTIONS` in ser
 
 - **Projects/tabs:** `get_document_info, list_documents, list_files, list_tabs, switch_tab, new_document, open_document, save_document, close_document, revert_document, set_project_name, set_canvas_size, set_material, undo, redo`
 - **Guide:** `get_guide(topic)`: workflow, layers, 3D placement recipes, CNC rules (also `GET /api/guide`, Help → Kerf guide). Keep `mcp-server/guide.md` up to date when conventions change.
+- **Shapes:** `add_slot, add_rounded_rect, add_outline, fillet_corners, add_dogbones` (exact arcs; corners by index or clicked [x, y])
 - **Elements:** `list_elements, add_element, add_svg` (many shapes at once, one undo step), `update_element, remove_element, set_element_layer, move_elements, transform_elements, duplicate, reorder, clear_document, get_svg`
 - **Entities/3D:** `list_groups, group_elements, ungroup, update_group` (name, qty, assembly), `move_to_entity`, `set_params`, `describe_assembly` (world boxes, clashes)
 - **Sheets:** `arrange_parts` (pack pieces onto sheets, SHEETS layer, notes block; 3D unchanged)

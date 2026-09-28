@@ -155,3 +155,13 @@ export async function docToPng(doc, maxSide = 16000, pxPerMm = 4) {
   const w = doc.width * scale, h = doc.height * scale;
   return svgToCanvas(docToSvg(doc, { pxWidth: w }), w, h);
 }
+
+/** SVG path of a straight slot with round ends (same shape the server's add_slot makes). */
+export function slotPath(x1, y1, x2, y2, w) {
+  const r = w / 2, len = Math.hypot(x2 - x1, y2 - y1);
+  if (!(r > 0)) return '';
+  if (len < 1e-9) return `M ${x1 - r} ${y1} A ${r} ${r} 0 1 0 ${x1 + r} ${y1} A ${r} ${r} 0 1 0 ${x1 - r} ${y1} Z`;
+  const nx = -(y2 - y1) / len * r, ny = (x2 - x1) / len * r;
+  return `M ${x1 + nx} ${y1 + ny} L ${x2 + nx} ${y2 + ny} A ${r} ${r} 0 0 0 ${x2 - nx} ${y2 - ny} ` +
+         `L ${x1 - nx} ${y1 - ny} A ${r} ${r} 0 0 0 ${x1 + nx} ${y1 + ny} Z`;
+}

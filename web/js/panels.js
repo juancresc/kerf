@@ -28,12 +28,13 @@ export function renderLayers() {
   if (!doc.layers.some(l => l.name === app.activeLayer)) app.activeLayer = doc.layers[0]?.name;
   const counts = {};
   doc.elements.forEach(e => counts[e.layer] = (counts[e.layer] || 0) + 1);
+  const selLayers = new Set(selectedElements().map(e => e.layer));
 
   // Top of the list = drawn on top (last in document order)
   layersBox.innerHTML = [...doc.layers].reverse().map(l => {
     const i = doc.layers.indexOf(l);
     const open = expanded.has(l.name);
-    return `<div class="layer ${l.name === app.activeLayer ? 'active' : ''} ${l.visible ? '' : 'hidden'}" data-layer="${esc(l.name)}" title="${esc(l.description)}">
+    return `<div class="layer ${l.name === app.activeLayer ? 'active' : ''} ${selLayers.has(l.name) ? 'has-selection' : ''} ${l.visible ? '' : 'hidden'}" data-layer="${esc(l.name)}" title="${esc(l.description)}">
       <div class="layer-row" title="Click to draw on this layer · double-click the name to rename">
         <button class="icon-btn small ${l.visible ? '' : 'off'}" data-act="visible" title="${l.visible ? 'Hide' : 'Show'}">${l.visible ? icons.eye : icons.eyeOff}</button>
         <button class="icon-btn small ${l.locked ? '' : 'off'}" data-act="lock" title="${l.locked ? 'Unlock' : 'Lock (not selectable)'}">${l.locked ? icons.lock : icons.unlock}</button>
@@ -276,6 +277,7 @@ function renderInspectorContent() {
     inspector.innerHTML = `<h2>Selected shape <span class="tag-pill">${esc(el.tag)}</span> <span class="tag-pill">${esc(el.id)}</span></h2>
       <div class="preview" style="margin-top:8px">${preview}</div>
       <div class="kv">
+        <label>Name</label><input type="text" data-name value="${esc(el.name || '')}" placeholder="unnamed" title="A label for this shape (not exported)">
         <label>Layer</label>${layerSelect(el.layer)}
         <label>Bounds</label><span class="val" data-bounds="auto">${size}</span>
         ${rows}
@@ -352,6 +354,8 @@ function bindShapeFields(el) {
       api.ops([{ op: 'update_element', id: el.id, attrs }], `Edit ${a}`);
     });
   });
+  inspector.querySelector('[data-name]')?.addEventListener('input', (e) =>
+    api.ops([{ op: 'update_element', id: el.id, name: e.target.value }], 'Rename shape'));
   inspector.querySelector('[data-text]')?.addEventListener('input', (e) =>
     api.ops([{ op: 'update_element', id: el.id, text: e.target.value }], 'Edit text'));
   const fillOn = inspector.querySelector('[data-fill-on]'), fillColor = inspector.querySelector('[data-fill]');
@@ -468,6 +472,13 @@ inspector.addEventListener('focusout', () => setTimeout(() => { if (inspectorQue
 document.getElementById('layer-add').innerHTML = icons.plus;
 document.getElementById('layer-add').addEventListener('click', addLayer);
 on('selection', refreshInspector);
+// Selecting shapes makes their layer the active one (for an entity spanning layers, keep the
+// active layer if it's one of them, otherwise take the first); all their layers get marked.
+on('selection', () => {
+  const layers = [...new Set(selectedElements().map(e => e.layer))];
+  if (layers.length && !layers.includes(app.activeLayer)) app.activeLayer = layers[0];
+  renderLayers();
+});
 
 
 // ── Entities panel ─────────────────────────────────────────
@@ -655,6 +666,6 @@ function contentRow(item) {
     : e.tag === 'ellipse' ? `${n(2 * a.rx)} × ${n(2 * a.ry)}` : e.tag === 'line' ? `${n(Math.hypot(a.x2 - a.x1, a.y2 - a.y1))} long`
     : e.tag === 'text' ? `“${esc((e.text || '').slice(0, 18))}”` : '';
   return `<div class="ent-item" data-item="${esc(item)}"><span class="ent-sw" style="background:${esc(layer?.color || '#999')}"></span>
-    <span class="ent-what">${esc(e.tag)}</span><span class="ent-dim">${dim}</span>
+    <span class="ent-what">${e.name ? `<b>${esc(e.name)}</b>` : esc(e.tag)}</span><span class="ent-dim">${dim}</span>
     <span class="ent-layer">${esc(e.layer)}</span>${x}</div>`;
 }

@@ -487,3 +487,32 @@ def test_move_to_group(tmp_path):
     assert not s.doc.groups
     s.undo()
     assert {g.name for g in s.doc.groups} == {"Plate", "Assembly"}
+
+
+def test_element_name_roundtrip(store):
+    eid = store.apply([{"op": "add_element", "tag": "rect", "attrs": {"x": 0, "y": 0, "width": 5, "height": 5},
+                        "name": "  hinge\n hole "}])[0]
+    assert store.doc.element(eid).name == "hinge hole"          # one line, trimmed
+    store.apply([{"op": "update_element", "id": eid, "name": "cable slot"}])
+    store.apply([{"op": "update_element", "id": eid, "name": "cable slot 2"}])
+    assert store.doc.element(eid).name == "cable slot 2"
+    store.undo()                                                  # rapid renames coalesce into one step
+    assert store.doc.element(eid).name == "hinge hole"
+    store.redo()
+    store.apply([{"op": "update_element", "id": eid, "attrs": {"x": 3}}])
+    assert store.doc.element(eid).name == "cable slot 2"         # other edits keep the name
+    store.save("named")
+    store.new()
+    store.open("named")
+    assert store.doc.element(eid).name == "cable slot 2"
+    svg = store.doc.to_svg("file")
+    assert 'data-name="cable slot 2"' in svg and "data-name" not in store.doc.to_svg("cnc")
+    store.import_svg(svg, new_tab=True)
+    e = store.doc.element(eid)
+    assert e.name == "cable slot 2" and "data-name" not in e.attrs
+    store.apply([{"op": "update_element", "id": eid, "name": ""}])
+    assert store.doc.element(eid).name == ""
+    d = Document.from_json({**store.doc.to_json(), "elements": [
+        {"id": "el-1", "tag": "rect", "layer": "CUT_OUTSIDE", "attrs": {}, "name": ["bad"] * 100}]})
+    d.sanitize()
+    assert len(d.elements[0].name) <= 80

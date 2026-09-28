@@ -518,7 +518,7 @@ export async function duplicate() {
       const e = elementById(id);
       if (!usable.has(e.layer)) continue;
       idx.push(ops.length);
-      ops.push({ op: 'add_element', tag: e.tag, layer: e.layer, text: e.text, group: app.context || undefined,
+      ops.push({ op: 'add_element', tag: e.tag, layer: e.layer, text: e.text, name: e.name || undefined, group: app.context || undefined,
                  attrs: { ...e.attrs, ...moveAttrs(e, d, d) } });
     }
     if (it.startsWith('g-') && idx.length)

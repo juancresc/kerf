@@ -76,6 +76,8 @@ INSTRUCTIONS = f"""Kerf — a CNC design editor shared with the user (they see e
   sheet, 2440 × 1220) and draws the sheets. Their 3D placement doesn't change.
 - Verify with numbers first: check_cnc (cut problems, overlapping/too-close parts, off-sheet) and
   describe_assembly (every part's world box in mm, overlaps). Then take_screenshot 2d / 3d.
+- Shapes: add_slot (round-ended), add_rounded_rect, add_outline (a radius per corner),
+  fillet_corners and add_dogbones (Ø = material tool) instead of writing arc path data by hand.
 - More than ~5 parts or anything parametric: write a Python script with kerf_script (get_guide scripts).
 - Tools act on the active tab (list_tabs / switch_tab). get_selection = what the user selected.
 - Name the project (set_project_name); after save_document give the share link {EDITOR_URL}/?open=<file>.
@@ -340,12 +342,13 @@ def list_elements(layer: str = "") -> str:
     d = store.doc
     els = [e for e in d.elements if not layer or e.layer == layer]
     return json.dumps({"width_mm": d.width, "height_mm": d.height,
-                       "elements": [{"id": e.id, "tag": e.tag, "layer": e.layer, "group": e.group, "attrs": e.attrs,
+                       "elements": [{"id": e.id, **({"name": e.name} if e.name else {}), "tag": e.tag, "layer": e.layer,
+                                     "group": e.group, "attrs": e.attrs,
                                      **({"text": e.text} if e.tag == "text" else {})} for e in els]})
 
 
 @tool
-def add_element(tag: str, attrs: Obj, text_content: str = "", layer: str = "") -> str:
+def add_element(tag: str, attrs: Obj, text_content: str = "", layer: str = "", name: str = "") -> str:
     """Add one element; coordinates in mm. Stroke colour/line style come from the layer.
     For many elements use add_svg (one call, one undo step).
 
@@ -354,9 +357,10 @@ def add_element(tag: str, attrs: Obj, text_content: str = "", layer: str = "") -
         attrs: SVG attributes, e.g. {"x": 10, "y": 10, "width": 200, "height": 100}.
         text_content: Text for <text> elements.
         layer: Layer name (default: first layer). See list_layers.
+        name: Optional label for the shape, e.g. "hinge hole" (shown in the editor, not exported).
     """
     [eid] = store.apply([{"op": "add_element", "tag": tag, "attrs": parse_json(attrs, "attrs"),
-                          "text": text_content, "layer": layer or None}])
+                          "text": text_content, "layer": layer or None, "name": name}])
     return json.dumps({"id": eid})
 
 
@@ -378,21 +382,92 @@ def add_svg(markup: str, layer: str = "") -> str:
     return json.dumps({"added": added, "ids": new_ids, "version": store.version})
 
 
+def _corners_arg(value):
+    """corners: "all"/"auto", a list, or the same list as a JSON string."""
+    if isinstance(value, str) and value.strip().startswith("["):
+        return parse_json(value, "corners")
+    return value
+
+
+def _shape(op: dict, label: str) -> str:
+    eid = store.apply([op], label=label)[0]
+    return json.dumps({"id": eid, "version": store.version})
+
+
+@tool
+def add_slot(x1: float, y1: float, x2: float, y2: float, width: float, layer: str = "CUT_INSIDE",
+             group: str = "") -> str:
+    """Add a straight slot with round ends (bolt tracks, knob slots): centre line (x1, y1) →
+    (x2, y2), `width` = slot width (= end diameter). Same start and end = a round hole."""
+    return _shape({"op": "add_slot", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "width": width,
+                   "layer": layer or None, "group": group or None}, "Add slot")
+
+
+@tool
+def add_rounded_rect(x: float, y: float, width: float, height: float, r: float,
+                     layer: str = "CUT_OUTSIDE", group: str = "") -> str:
+    """Add a rectangle (top-left x, y) with every corner rounded to r (clamped to half the
+    shorter side), as an exact path of lines and arcs."""
+    return _shape({"op": "add_rounded_rect", "x": x, "y": y, "width": width, "height": height, "r": r,
+                   "layer": layer or None, "group": group or None}, "Add rounded rectangle")
+
+
+@tool
+def add_outline(points: list | str, layer: str = "CUT_OUTSIDE", group: str = "") -> str:
+    """Add a closed outline through points [[x, y], [x, y, r], ...]: r rounds that corner
+    (clamped so neighbouring fillets fit). The way to draw a leg or frame with mixed radii.
+
+    Args:
+        points: Corners in document mm, e.g. [[0, 0], [400, 0, 60], [400, 700], [0, 700, 20]].
+    """
+    pts = parse_json(points, "points")
+    return _shape({"op": "add_outline", "points": pts, "layer": layer or None, "group": group or None},
+                  "Add outline")
+
+
+@tool
+def fillet_corners(element_id: str, r: float, corners: list | str = "all") -> str:
+    """Round corners of a straight-edged shape (rect, polygon, path of lines) to radius r. The
+    element keeps its id and becomes a path.
+
+    Args:
+        corners: "all", corner indices (in drawing order), or [x, y] points in document mm
+                 (the nearest corner within 5 mm).
+    """
+    return _shape({"op": "fillet", "id": element_id, "r": r, "corners": _corners_arg(corners)}, "Fillet")
+
+
+@tool
+def add_dogbones(element_id: str, tool_d: float = 0, corners: list | str = "auto") -> str:
+    """Dog-bone reliefs so a square part fits a routed corner: a circle of the tool Ø through each
+    chosen corner. "auto" = every corner of a hole (CUT_INSIDE), or the concave corners of an
+    outline (tenon shoulders). tool_d 0 = the material's tool diameter.
+
+    Args:
+        corners: "auto", "all", corner indices, or [x, y] points in document mm.
+    """
+    op = {"op": "dogbone", "id": element_id, "corners": _corners_arg(corners)}
+    if tool_d:
+        op["tool_d"] = tool_d
+    return _shape(op, "Dog-bones")
+
+
 @tool
 def update_element(element_id: str, attrs: Obj = "{}", text_content: str | None = None,
-                   layer: str = "") -> str:
-    """Change an element's attributes (null or "" removes one), its text or its layer.
+                   layer: str = "", name: str | None = None) -> str:
+    """Change an element's attributes (null or "" removes one), its text, layer or name.
 
     Args:
         element_id: e.g. "el-12".
         attrs: Attributes to set, e.g. {"x": 120}.
         text_content: New text for <text> elements.
         layer: Move the element to this layer.
+        name: Rename the shape ("" clears the name).
     """
     store.apply([{"op": "update_element", "id": element_id, "attrs": parse_json(attrs, "attrs"),
-                  "text": text_content, "layer": layer or None}])
+                  "text": text_content, "layer": layer or None, "name": name}])
     e = store.doc.element(element_id)
-    return json.dumps({"id": e.id, "tag": e.tag, "layer": e.layer, "attrs": e.attrs})
+    return json.dumps({"id": e.id, "name": e.name, "tag": e.tag, "layer": e.layer, "attrs": e.attrs})
 
 
 @tool
@@ -560,7 +635,7 @@ def duplicate(items: Ids, dx: float = 10, dy: float = 10, name: str = "") -> str
             e = d.element(eid)
             t = " ".join(x for x in (f"translate({dx}, {dy})", e.attrs.get("transform")) if x)
             idx.append(len(ops))
-            ops.append({"op": "add_element", "tag": e.tag, "layer": e.layer, "text": e.text,
+            ops.append({"op": "add_element", "tag": e.tag, "layer": e.layer, "text": e.text, "name": e.name,
                         "attrs": {**e.attrs, **move_attrs(e, dx, dy)}})
         plan.append((i, idx))
     n_el = len(ops)
@@ -652,7 +727,7 @@ def apply_ops(ops: list | str, label: str = "") -> str:
     """Run several editor operations atomically as ONE undo step (all or nothing). Pass the ops
     as a JSON list. Name an op with "as": "outline" and refer to its result as "$outline" in a
     later op's items/id/ids/group/parent ("$n" = the result of op n also works).
-    Ops: add_element{tag,attrs,text,layer,group} · update_element{id,attrs,text,layer} ·
+    Ops: add_element{tag,attrs,text,layer,group,name} · update_element{id,attrs,text,layer,name} ·
     remove_elements{ids} · reorder_element{id,where} · group{items,name,parent} · ungroup{id} ·
     set_group{items,group} · update_group{id,name,qty,assembly} ·
     move{items,dx,dy} · transform{items,transform} (entities keep their 3D placement) ·
@@ -672,10 +747,10 @@ def apply_ops(ops: list | str, label: str = "") -> str:
 
 @tool
 def find_elements(layer: str = "", tag: str = "", entity: str = "", x: float | None = None, y: float | None = None,
-                  width: float | None = None, height: float | None = None, limit: int = 200) -> str:
-    """Find elements by layer, tag, entity (id or name, any depth) and/or an area (x, y, width,
-    height in mm: elements whose bounds touch it). Returns ids with bounds — much smaller than
-    list_elements."""
+                  width: float | None = None, height: float | None = None, limit: int = 200, name: str = "") -> str:
+    """Find elements by layer, tag, name (case-insensitive substring), entity (id or name, any depth)
+    and/or an area (x, y, width, height in mm: elements whose bounds touch it). Returns ids with
+    bounds — much smaller than list_elements."""
     d = store.doc
     ids = None
     if entity:
@@ -686,12 +761,14 @@ def find_elements(layer: str = "", tag: str = "", entity: str = "", x: float | N
     area = (x, y, x + width, y + height) if None not in (x, y, width, height) else None
     out = []
     for e in d.elements:
-        if (layer and e.layer != layer) or (tag and e.tag != tag) or (ids is not None and e.id not in ids):
+        if (layer and e.layer != layer) or (tag and e.tag != tag) or (ids is not None and e.id not in ids) \
+                or (name and name.lower() not in e.name.lower()):
             continue
         b = bbox([e])
         if area and (not b or b[2] < area[0] or b[0] > area[2] or b[3] < area[1] or b[1] > area[3]):
             continue
-        out.append({"id": e.id, "tag": e.tag, "layer": e.layer, "entity": e.group, **(_box(b) if b else {})})
+        out.append({"id": e.id, **({"name": e.name} if e.name else {}), "tag": e.tag, "layer": e.layer,
+                    "entity": e.group, **(_box(b) if b else {})})
         if len(out) >= limit:
             break
     return json.dumps({"count": len(out), "elements": out})

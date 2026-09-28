@@ -81,6 +81,8 @@ Each entity's `assembly` has these fields:
 
 **Fixing entities:** `move_to_entity(ids, entity)` (op `set_group {items, group}`) adds shapes or entities to an entity, or takes them out when `entity` is empty. Entities left empty disappear.
 
+**Naming shapes:** single shapes can carry a `name` too ("hinge hole", "cable slot"): `add_element{…, name}`, `update_element{id, name}` (`""` clears it), `find_elements(name=…)`. Names are labels for the editor and for you, never exported to CNC.
+
 ## CNC rules of thumb (18 mm plywood)
 
 - Inside corners get the tool radius (3 mm for a 6 mm end mill). Add dog-bones where a square part must fit in.
@@ -91,6 +93,20 @@ Each entity's `assembly` has these fields:
   - inset the board about 10 mm from the panel's edge so there's wood left around the hole.
 - Closed outlines, no duplicate lines, no text on cut layers, no parts bigger than the sheet or bed.
 - **Opposite-hand parts with pockets must be drawn mirrored**, so both pockets end up on their inner faces.
+
+## Shapes (slots, rounded corners, dog-bones)
+
+Don't write arc path data by hand; these make exact lines + arcs (DXF arcs, true circles):
+
+| feature | tool / op | notes |
+|---|---|---|
+| bolt track, knob slot | `add_slot` / `{"op": "add_slot", x1, y1, x2, y2, width}` | centre line + width; zero length = round hole; default layer CUT_INSIDE |
+| window, panel with round corners | `add_rounded_rect` / `{"op": "add_rounded_rect", x, y, width, height, r}` | r clamped to half the shorter side |
+| leg, frame, any outline with mixed radii | `add_outline` / `{"op": "add_outline", points: [[x, y], [x, y, r], ...]}` | r per corner, clamped to fit |
+| round some corners of an existing shape | `fillet_corners` / `{"op": "fillet", id, r, corners}` | rect, polygon or path of straight lines; keeps the id |
+| square part into a routed hole / tenon shoulders | `add_dogbones` / `{"op": "dogbone", id, tool_d?, corners}` | "auto": every corner of a CUT_INSIDE hole, else the concave corners; Ø = material tool |
+
+`corners` is `"all"`, corner indices in drawing order, or `[x, y]` points in document mm (nearest corner within 5 mm). In scripts use `k.slot(x1, y1, x2, y2, w)`, `k.rounded_rect(x0, y0, x1, y1, r)` and `k.build(..., corners)`.
 
 ## SVG gotchas
 
@@ -152,6 +168,6 @@ tab = d.run()      # python3 shelf.py [tab] [--dry] [--save shelf/shelf]
 - **`run()`** is the command line: no argument = a new tab (the user's active tab stays active); a tab id (`t3`) = rebuild that tab in place, as one undo step; `--dry` = local checks only; `--save file` = save the .kerf. It prints the sheets and `check_cnc`.
 - **Keep every change in the script** (holes, engravings, tweaks). An edit made only in the editor is lost the next time the script runs. Cache the output of optional tools (e.g. fontTools glyph outlines for engraved text) next to the script, so it still runs without them.
 - **Draw parts in their own coordinates, y up**, the way the 3D recipe expects (side panel = depth × height, flat board = width × depth with the front at y = 0). Their spot on the drawing doesn't matter: `arrange()` packs them and the 3D placement follows. `at=(X, Y), turn=90` places a part by hand instead.
-- **Outlines:** `build(vertices, corners)`: `("fillet", r)` rounds a corner, `("dog", r)` adds a dog-bone, `auto_dog=r` dog-bones every concave corner (tenon shoulders), and an `("arc", centre, via)` item between two vertices makes that edge an arc. `circle(cx, cy, r)` is a round outline. Arc flags are computed for you; never write them by hand. Corner indices count vertices only, not arc items.
+- **Outlines:** `build(vertices, corners)`: `("fillet", r)` rounds a corner, `("dog", r)` adds a dog-bone, `auto_dog=r` dog-bones every concave corner (tenon shoulders), and an `("arc", centre, via)` item between two vertices makes that edge an arc. `circle(cx, cy, r)` is a round outline, `slot(x1, y1, x2, y2, width)` a round-ended slot, `rounded_rect(x0, y0, x1, y1, r)` a rectangle with round corners. Arc flags are computed for you; never write them by hand. Corner indices count vertices only, not arc items.
 - **Check before you look:** `k.bounds(outline)` must match the size you meant (an off-by-one corner index or a wrong arc shows up here). `d.expect(name, box)` / `d.world_box(name)` confirm each part's world X/Y/Z range before anything is sent. Then `check_cnc`, `describe_assembly` and screenshots.
 - Lower level, for special cases: `place(box, X, Y, turn)` → (drawing mapping, matrix), `to_path(outline, f)`, `part(name, pieces, qty, assembly)` → ops, `post(ops, label, tab)`, `new_tab()`, `check(tab)`, `save(file, tab)`, `world_box(assembly, points)`.

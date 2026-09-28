@@ -6,6 +6,7 @@
 import { app, on, descendants, selectItems, setContext } from './state.js';
 import { renderAttrs } from './geometry.js';
 import { esc, toast, download } from './ui.js';
+import { partMaterials, faceEdgeUV } from './textures.js';
 
 const host = document.getElementById('view3d-canvas');
 const panel = document.getElementById('view3d-panel');
@@ -18,14 +19,18 @@ const values = {};           // current param values
 let explode = 0;             // 0 = assembled … 1 = fully exploded (assembly view)
 let navMode = 'rotate';      // left-drag: 'rotate' or 'move' (pan)
 let seeThrough = false;      // semi-transparent parts to see hidden pockets, pins, joints
+let textured = (() => { try { return localStorage.getItem('kerf.p3Textures') !== '0'; } catch (_) { return true; } })();
+
+const mats = mesh => Array.isArray(mesh.material) ? mesh.material : [mesh.material];
 
 function applySeeThrough() {
   for (const p of parts) {
-    const m = p.mesh.material;
-    m.transparent = seeThrough;
-    m.opacity = seeThrough ? 0.35 : 1;
-    m.depthWrite = !seeThrough;
-    m.needsUpdate = true;
+    for (const m of mats(p.mesh)) {
+      m.transparent = seeThrough || !!m.transmission;     // clear acrylic stays transparent
+      m.opacity = seeThrough ? 0.35 : 1;
+      m.depthWrite = !seeThrough;
+      m.needsUpdate = true;
+    }
   }
 }
 
@@ -233,13 +238,16 @@ function buildScene() {
   for (const { g, ids, a } of list) {
     const pg = partGeometry(doc, ids);
     if (!pg.outers.length) continue;
-    const slabs = extrudePart(pg, a.thickness || mat.thickness || 18);
-    const geo = slabs.length === 1 ? slabs[0] : mergeGeometries(slabs);
+    const thickness = a.thickness || mat.thickness || 18;
+    const slabs = extrudePart(pg, thickness);
+    let geo = slabs.length === 1 ? slabs[0] : mergeGeometries(slabs);
     const [ma, mb, mc, md, me, mf] = a.matrix || [1, 0, 0, 1, 0, 0];
     geo.applyMatrix4(new THREE.Matrix4().set(ma, mc, 0, me, mb, md, 0, mf, 0, 0, 1, 0, 0, 0, 0, 1));
-    geo.computeVertexNormals();
+    const raw = geo;
+    geo = faceEdgeUV(THREE, raw);           // mm UVs; group 0 = faces, 1 = cut edges
+    raw.dispose();
     const color = a.color || mat.color || '#e3c592';
-    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color, roughness: 0.85, side: THREE.DoubleSide }));
+    const mesh = new THREE.Mesh(geo, partMaterials(THREE, mat, color, thickness, textured));
     const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 25),
                                          new THREE.LineBasicMaterial({ color: '#8a6a35', transparent: true, opacity: 0.55 }));
     mesh.add(edges);
@@ -251,6 +259,7 @@ function buildScene() {
     mesh.userData.name = g.name;
     mesh.userData.gid = g.id || null;
     mesh.userData.ids = ids;
+    mesh.userData.material = { mat, color, thickness };
     partsRoot.add(mesh);
     parts.push({ mesh, base, move: a.move });
     count++;
@@ -325,7 +334,8 @@ function renderPanel(mode, count) {
     <div class="row nav-row"><span class="seg"><button class="btn ${navMode === 'rotate' ? 'on' : ''}" data-nav="rotate" title="Left-drag rotates">Rotate</button><button
         class="btn ${navMode === 'move' ? 'on' : ''}" data-nav="move" title="Left-drag moves (pans) the view">Move</button></span>
       <button class="btn" data-fit>Reset view</button>
-      <button class="btn ${seeThrough ? 'on' : ''}" data-see title="Semi-transparent parts: see pockets, pins and joints inside">See-through</button></div>
+      <button class="btn ${seeThrough ? 'on' : ''}" data-see title="Semi-transparent parts: see pockets, pins and joints inside">See-through</button>
+      <button class="btn ${textured ? 'on' : ''}" data-tex title="Wood grain, plywood plies and finishes from the material type (off: plain colour)">Textures</button></div>
     ${mode === 'flat' ? `<p class="note">No part has a 3D position yet, so everything is shown flat, as on the sheet, at the material thickness.
       To assemble: group each part (select its shapes → ⌘G), then “Place in 3D…” in the Inspector — or ask Claude to place them.</p>` : ''}
     <p class="note">${navMode === 'move' ? 'Drag: move' : 'Drag: rotate'} · Shift+drag or right-drag: ${navMode === 'move' ? 'rotate' : 'move'} · scroll: zoom to pointer ·
@@ -363,6 +373,19 @@ panel.addEventListener('click', (e) => {
   if (e.target.closest('[data-fit]')) fitView();
   const see = e.target.closest('[data-see]');
   if (see) { seeThrough = !seeThrough; see.classList.toggle('on', seeThrough); applySeeThrough(); }
+  const tex = e.target.closest('[data-tex]');
+  if (tex) {
+    textured = !textured;
+    tex.classList.toggle('on', textured);
+    try { localStorage.setItem('kerf.p3Textures', textured ? '1' : '0'); } catch (_) { /* private mode */ }
+    for (const p of parts) {
+      const t = p.mesh.userData.material;
+      mats(p.mesh).forEach(m => m.dispose());
+      p.mesh.material = partMaterials(THREE, t.mat, t.color, t.thickness, textured);
+    }
+    applySeeThrough();
+    highlightSelection();
+  }
   const nav = e.target.closest('[data-nav]');
   if (nav) { setNavMode(nav.dataset.nav); renderPanelNote(); }
 
@@ -443,7 +466,7 @@ export async function exportModel(format) {
   for (const p of parts) {
     const m = p.mesh.clone(false);
     m.geometry = p.mesh.geometry;
-    m.material = p.mesh.material;
+    m.material = new THREE.MeshStandardMaterial({ color: mats(p.mesh)[0].color, roughness: 0.85 });  // base colour only
     root.add(m);
   }
   const name = app.server.name || 'model';
@@ -462,8 +485,10 @@ export async function exportModel(format) {
 function highlightSelection() {
   for (const p of parts) {
     const sel = [...p.mesh.userData.ids].some(id => app.selection.has(id));
-    p.mesh.material.emissive?.set(sel ? '#2563eb' : '#000000');
-    p.mesh.material.emissiveIntensity = sel ? 0.45 : 0;
+    for (const m of mats(p.mesh)) {
+      m.emissive?.set(sel ? '#2563eb' : '#000000');
+      m.emissiveIntensity = sel ? 0.45 : 0;
+    }
   }
 }
 on('selection', () => { if (parts.length) highlightSelection(); });

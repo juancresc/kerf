@@ -1,9 +1,11 @@
 // Canvas view: renders the document, zoom/scroll, grid, rulers, and the tools
-// (select + move + marquee, pan, line, rect, circle, ellipse, text).
+// (select + move + marquee, pan, line, rect (+ radius), circle, ellipse, slot, outline, fillet,
+// dog-bone, text). Slots, rounded rects, outlines, fillets and dog-bones are made by server ops
+// (exact arcs); the browser only previews them.
 
 import { app, emit, on, savePref, setSelection, elementById, itemAt, elementsOf, selectItems, selectedItems,
          setContext, descendants, groupById, ancestors } from './state.js';
-import { NS, createNode, bboxOf, unionBox, boxInside, boxTouches } from './geometry.js';
+import { NS, createNode, bboxOf, unionBox, boxInside, boxTouches, slotPath } from './geometry.js';
 import { api } from './api.js';
 import { modal, toast } from './ui.js';
 
@@ -30,6 +32,11 @@ let gesture = null;            // current pointer interaction
 let pendingRender = false;
 let spaceDown = false;
 let cursorDoc = null;
+let lastClient = { x: 0, y: 0 }; // last pointer position (screen), for the tool-options box
+// Values the shape tools remember between uses (typed in the dimension box)
+export const toolOpts = { radius: 0, slotWidth: 10, fillet: 10, dogbone: 0 };
+const DRAFT_TAG = { slot: 'path', outline: 'polyline' };
+const CORNER_TOOLS = new Set(['fillet', 'dogbone']);
 
 // ── Rendering ──────────────────────────────────────────────
 
@@ -400,6 +407,8 @@ wrap.addEventListener('pointerdown', (e) => {
   if (document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   if (e.target === wrap && (e.offsetX >= wrap.clientWidth || e.offsetY >= wrap.clientHeight)) return; // scrollbar
   const panning = app.tool === 'pan' || spaceDown || e.button === 1;
+  if (!panning && app.tool === 'outline') { outlineClick(e); e.preventDefault(); return; }
+  if (!panning && CORNER_TOOLS.has(app.tool)) { cornerClick(e); e.preventDefault(); return; }
   if (panning) {
     gesture = { kind: 'pan', x: e.clientX, y: e.clientY, sl: wrap.scrollLeft, st: wrap.scrollTop };
     svg.classList.add('panning');
@@ -417,7 +426,7 @@ wrap.addEventListener('pointerdown', (e) => {
     const layer = activeLayerUsable();
     if (!layer) return;
     const p = snapP(toDoc(e.clientX, e.clientY));
-    const draft = document.createElementNS(NS, app.tool);
+    const draft = document.createElementNS(NS, DRAFT_TAG[app.tool] || app.tool);
     draft.setAttribute('class', 'draft');
     gOverlay.appendChild(draft);
     gesture = { kind: 'draw', tool: app.tool, start: p, draft, attrs: null, x: e.clientX, y: e.clientY };
@@ -429,10 +438,16 @@ wrap.addEventListener('pointerdown', (e) => {
 
 wrap.addEventListener('pointermove', (e) => {
   cursorDoc = toDoc(e.clientX, e.clientY);
+  lastClient = { x: e.clientX, y: e.clientY };
   emit('cursor', cursorDoc);
   drawRulers();
-  if (!gesture) { if (app.tool === 'measure') showSnap(e.clientX, e.clientY); return; }
+  if (!gesture) { if (app.tool === 'measure' || app.tool === 'outline' || CORNER_TOOLS.has(app.tool)) showSnap(e.clientX, e.clientY); return; }
   const g = gesture;
+  if (g.kind === 'outline') {
+    showSnap(e.clientX, e.clientY);
+    if (numBox.hidden) { g.hover = outlinePoint(e); drawOutline(g); }
+    return;
+  }
   if (g.kind === 'pan') {
     wrap.scrollLeft = g.sl - (e.clientX - g.x);
     wrap.scrollTop = g.st - (e.clientY - g.y);
@@ -481,6 +496,7 @@ wrap.addEventListener('pointerleave', () => { if (!gesture) { cursorDoc = null; 
 
 // Double-click: enter the group under the pointer (drill down one level)
 wrap.addEventListener('dblclick', (e) => {
+  if (gesture?.kind === 'outline') { commitDraw(); return; }
   if (app.tool !== 'select') return;
   const eid = pickAt(e.clientX, e.clientY);
   if (!eid) { exitGroup(); return; }
@@ -591,7 +607,7 @@ function resetMovePreview(g = gesture) {
 
 async function finishGesture(e) {
   const g = gesture;
-  if (!g) return;
+  if (!g || g.kind === 'outline') return;     // outlines finish on Enter / double-click / first point
   gesture = null;
   svg.classList.remove('panning');
   if (g.kind === 'press') {
@@ -644,12 +660,14 @@ function updateDraft(p, constrain) {
   let a = null;
   const r3 = v => Math.round(v * 1000) / 1000;
   switch (g.tool) {
+    case 'slot':
     case 'line':
       if (constrain) {  // snap angle to 45°
         const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
         dx = len * Math.cos(ang); dy = len * Math.sin(ang);
       }
       if (Math.hypot(dx, dy) >= 0.5) a = { x1: s.x, y1: s.y, x2: r3(s.x + dx), y2: r3(s.y + dy) };
+      if (a && g.tool === 'slot') a.width = toolOpts.slotWidth;
       break;
     case 'rect':
       if (constrain) { const m = Math.max(Math.abs(dx), Math.abs(dy)); dx = Math.sign(dx || 1) * m; dy = Math.sign(dy || 1) * m; }
@@ -667,8 +685,71 @@ function updateDraft(p, constrain) {
       break;
   }
   g.attrs = a;
-  if (a) for (const [k, v] of Object.entries(a)) g.draft.setAttribute(k, v);
+  if (a) setDraft(g, a);
   emit('drafting', a && { tool: g.tool, attrs: a });
+}
+
+/** Show the draft: slots as their path, rects with the remembered corner radius. */
+function setDraft(g, a) {
+  if (g.tool === 'slot') return g.draft.setAttribute('d', slotPath(a.x1, a.y1, a.x2, a.y2, a.width));
+  for (const [k, v] of Object.entries(a)) g.draft.setAttribute(k, v);
+  if (g.tool === 'rect') for (const k of ['rx', 'ry']) g.draft.setAttribute(k, toolOpts.radius);
+}
+
+// ── Outline tool: click corners; Enter, double-click or the first point closes it ──
+
+function outlinePoint(e) {
+  const g = gesture;
+  let p = snapMeasure(e.clientX, e.clientY);
+  const last = g?.kind === 'outline' && g.pts[g.pts.length - 1];
+  if (last && e.shiftKey) {  // 0/45/90° from the last corner
+    const dx = p.x - last.x, dy = p.y - last.y;
+    const ang = Math.round(Math.atan2(dy, dx) / (Math.PI / 4)) * (Math.PI / 4), len = Math.hypot(dx, dy);
+    p = { x: last.x + len * Math.cos(ang), y: last.y + len * Math.sin(ang) };
+  }
+  return { x: Math.round(p.x * 1000) / 1000, y: Math.round(p.y * 1000) / 1000 };
+}
+
+function outlineClick(e) {
+  if (!activeLayerUsable()) return;
+  const p = outlinePoint(e);
+  let g = gesture;
+  if (g?.kind !== 'outline') {
+    const draft = document.createElementNS(NS, 'polyline');
+    draft.setAttribute('class', 'draft');
+    gOverlay.appendChild(draft);
+    g = gesture = { kind: 'outline', tool: 'outline', pts: [], draft, x: e.clientX, y: e.clientY };
+  }
+  const first = g.pts[0];
+  if (first && g.pts.length >= 3 && Math.hypot(p.x - first.x, p.y - first.y) < SNAP_PX / app.zoom) return commitDraw();
+  const last = g.pts[g.pts.length - 1];
+  if (!last || Math.hypot(p.x - last.x, p.y - last.y) > 1e-6) g.pts.push(p);
+  g.cx = e.clientX; g.cy = e.clientY;
+  drawOutline(g);
+}
+
+function drawOutline(g) {
+  const pts = g.hover ? [...g.pts, g.hover] : g.pts;
+  g.draft.setAttribute('points', pts.map(p => `${p.x},${p.y}`).join(' '));
+  emit('drafting', { tool: 'outline', attrs: { n: g.pts.length, radius: toolOpts.radius } });
+}
+
+// ── Fillet / dog-bone tools: click a corner (Shift: every corner / every inside corner) ──
+
+async function cornerClick(e) {
+  const eid = pickAt(e.clientX, e.clientY) || (app.selection.size === 1 ? [...app.selection][0] : null);
+  const el = eid && elementById(eid);
+  if (!el) { toast('Click a corner of a shape (a rectangle, polygon or path of straight lines)', 'error'); return; }
+  const layer = app.doc.layers.find(l => l.name === el.layer);
+  if (layer?.locked) { toast(`Layer ${layer.name} is locked`, 'error'); return; }
+  const p = snapMeasure(e.clientX, e.clientY);
+  const tol = Math.max(0.5, 2 * SNAP_PX / app.zoom);
+  const op = app.tool === 'fillet'
+    ? { op: 'fillet', id: eid, r: toolOpts.fillet, corners: e.shiftKey ? 'all' : [[p.x, p.y]], tol }
+    : { op: 'dogbone', id: eid, corners: e.shiftKey ? 'auto' : [[p.x, p.y]], tol,
+        ...(toolOpts.dogbone > 0 ? { tool_d: toolOpts.dogbone } : {}) };
+  const state = await api.ops([op], app.tool === 'fillet' ? 'Fillet' : 'Dog-bones');
+  if (state?.results) setSelection([eid]);
 }
 
 async function placeText(p) {
@@ -851,23 +932,36 @@ document.querySelector('.canvas-area').appendChild(numBox);
 
 const FIELDS = {
   line: [['len', 'Length', 'mm'], ['ang', 'Angle', '°']],
-  rect: [['w', 'Width', 'mm'], ['h', 'Height', 'mm']],
+  rect: [['w', 'Width', 'mm'], ['h', 'Height', 'mm'], ['rad', 'Radius', 'mm']],
   circle: [['d', 'Diameter', 'mm']],
+  slot: [['len', 'Length', 'mm'], ['ang', 'Angle', '°'], ['w', 'Width', 'mm']],
+  outline: [['rad', 'Corner radius', 'mm']],
+  fillet: [['r', 'Fillet radius', 'mm']],
+  dogbone: [['d', 'Tool Ø (0 = material)', 'mm']],
   ellipse: [['w', 'Width', 'mm'], ['h', 'Height', 'mm']],
 };
 
 export function isDrawing() {
-  return gesture?.kind === 'draw';
+  return gesture?.kind === 'draw' || gesture?.kind === 'outline';
+}
+
+/** Tools whose value (radius, tool Ø) can be typed without drawing anything. */
+export function hasToolOptions() {
+  return !gesture && CORNER_TOOLS.has(app.tool);
 }
 
 function currentValues(g) {
   const a = g.attrs || {}, r = v => String(+(+v || 0).toFixed(3));
   switch (g.tool) {
+    case 'slot':
     case 'line': {
       const dx = (a.x2 ?? g.start.x) - g.start.x, dy = (a.y2 ?? g.start.y) - g.start.y;
-      return { len: r(Math.hypot(dx, dy)), ang: r(-Math.atan2(dy, dx) * 180 / Math.PI) };
+      return { len: r(Math.hypot(dx, dy)), ang: r(-Math.atan2(dy, dx) * 180 / Math.PI), w: r(toolOpts.slotWidth) };
     }
-    case 'rect': return { w: r(a.width), h: r(a.height) };
+    case 'rect': return { w: r(a.width), h: r(a.height), rad: r(toolOpts.radius) };
+    case 'outline': return { rad: r(toolOpts.radius) };
+    case 'fillet': return { r: r(toolOpts.fillet) };
+    case 'dogbone': return { d: r(toolOpts.dogbone) };
     case 'circle': return { d: r(2 * (a.r || 0)) };
     case 'ellipse': return { w: r(2 * (a.rx || 0)), h: r(2 * (a.ry || 0)) };
   }
@@ -876,8 +970,10 @@ function currentValues(g) {
 
 /** Open the dimension box, starting with the typed character in the first field. */
 export function beginNumericEntry(firstKey) {
-  const g = gesture;
-  if (!g || g.kind !== 'draw' || !FIELDS[g.tool]) return;
+  const g = gesture && isDrawing() ? gesture
+    : hasToolOptions() ? { tool: app.tool, cx: lastClient.x, cy: lastClient.y, options: true } : null;
+  if (!g || !FIELDS[g.tool]) return;
+  numBox.dataset.tool = g.options ? g.tool : '';
   const vals = currentValues(g);
   numBox.innerHTML = FIELDS[g.tool].map(([k, label, unit], i) =>
     `<label>${label}<input name="${k}" inputmode="decimal" value="${i === 0 && firstKey ? '' : vals[k]}" autocomplete="off"><span>${unit}</span></label>`).join('') +
@@ -894,6 +990,7 @@ export function beginNumericEntry(firstKey) {
 
 function hideNumBox() {
   if (!numBox.hidden) { numBox.hidden = true; numBox.innerHTML = ''; }
+  numBox.dataset.tool = '';
 }
 
 function valuesFromBox() {
@@ -902,16 +999,27 @@ function valuesFromBox() {
 
 // Live preview while typing
 function updateFromBox() {
+  if (numBox.hidden) return;
+  const v = valuesFromBox(), ok = x => !isNaN(x) && x >= 0;
+  const t = numBox.dataset.tool || gesture?.tool;
+  if (t === 'fillet' && v.r > 0) toolOpts.fillet = v.r;
+  if (t === 'dogbone' && ok(v.d)) toolOpts.dogbone = v.d;
+  if ((t === 'rect' || t === 'outline') && ok(v.rad)) toolOpts.radius = v.rad;
+  if (t === 'slot' && v.w > 0) toolOpts.slotWidth = v.w;
+  emit('tool-options');
   const g = gesture;
-  if (!g || numBox.hidden) return;
-  const v = valuesFromBox(), s = g.start, prev = g.attrs || {};
+  if (!g || numBox.dataset.tool) return;
+  if (g.kind === 'outline') return drawOutline(g);
+  const s = g.start, prev = g.attrs || {};
   const r3 = x => Math.round(x * 1000) / 1000;
   let a = null;
   switch (g.tool) {
+    case 'slot':
     case 'line':
       if (v.len > 0) {
         const ang = (isNaN(v.ang) ? 0 : v.ang) * Math.PI / 180;
         a = { x1: s.x, y1: s.y, x2: r3(s.x + v.len * Math.cos(ang)), y2: r3(s.y - v.len * Math.sin(ang)) };
+        if (g.tool === 'slot') a.width = toolOpts.slotWidth;
       }
       break;
     case 'rect':
@@ -930,26 +1038,44 @@ function updateFromBox() {
   }
   if (a) {
     g.attrs = a;
-    for (const [k, val] of Object.entries(a)) g.draft.setAttribute(k, val);
+    setDraft(g, a);
     emit('drafting', { tool: g.tool, attrs: a });
   }
 }
 
 numBox.addEventListener('input', updateFromBox);
-numBox.addEventListener('submit', (e) => { e.preventDefault(); updateFromBox(); commitDraw(); });
+numBox.addEventListener('submit', (e) => {
+  e.preventDefault();
+  updateFromBox();
+  // A tool option or the outline's radius: keep going; a shape's size: draw it
+  if (numBox.dataset.tool || gesture?.kind === 'outline') hideNumBox(); else commitDraw();
+});
 numBox.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape') { e.preventDefault(); cancelGesture(); }
+  if (e.key === 'Escape') { e.preventDefault(); if (numBox.dataset.tool || gesture?.kind === 'outline') hideNumBox(); else cancelGesture(); }
   e.stopPropagation();
 });
 
 export async function commitDraw() {
   const g = gesture;
-  if (!g || g.kind !== 'draw') return;
+  if (!g || !isDrawing()) return;
   gesture = null;
   hideNumBox();
   g.draft.remove();
-  if (!g.attrs) return;
-  const state = await api.ops([{ op: 'add_element', tag: g.tool, attrs: g.attrs, layer: app.activeLayer }], `Draw ${g.tool}`);
+  const layer = app.activeLayer;
+  let op;
+  if (g.kind === 'outline') {
+    if (g.pts.length < 3) { toast('An outline needs at least 3 corners', 'error'); return; }
+    op = { op: 'add_outline', points: g.pts.map(p => toolOpts.radius > 0 ? [p.x, p.y, toolOpts.radius] : [p.x, p.y]), layer };
+  } else if (!g.attrs) {
+    return;
+  } else if (g.tool === 'slot') {
+    op = { op: 'add_slot', ...g.attrs, layer };
+  } else if (g.tool === 'rect' && toolOpts.radius > 0) {
+    op = { op: 'add_rounded_rect', ...g.attrs, r: toolOpts.radius, layer };
+  } else {
+    op = { op: 'add_element', tag: g.tool, attrs: g.attrs, layer };
+  }
+  const state = await api.ops([op], `Draw ${g.tool}`);
   if (state?.results) setSelection([state.results[0]]);
   if (pendingRender) render();
 }

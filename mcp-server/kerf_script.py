@@ -249,6 +249,27 @@ def circle(cx, cy, r):
             ("A", (cx - r, cy), (cx, cy), (cx, cy + r))]
 
 
+def slot(x1, y1, x2, y2, width):
+    """Straight slot with round ends: centre line (x1, y1) → (x2, y2). Zero length = a circle."""
+    r = width / 2
+    if r <= 0:
+        raise ValueError("slot width must be > 0")
+    n_len = math.hypot(x2 - x1, y2 - y1)
+    if n_len < 1e-9:
+        return circle(x1, y1, r)
+    u = ((x2 - x1) / n_len, (y2 - y1) / n_len)
+    n = (-u[1], u[0])
+    p1, p2 = (x1, y1), (x2, y2)
+    return build([_add(p1, n, r), _add(p2, n, r), ("arc", p2, _add(p2, u, r)),
+                  _add(p2, n, -r), _add(p1, n, -r), ("arc", p1, _add(p1, u, -r))])
+
+
+def rounded_rect(x0, y0, x1, y1, r):
+    """Rectangle with every corner rounded to r (clamped to half the shorter side)."""
+    r = max(0.0, min(r, abs(x1 - x0) / 2, abs(y1 - y0) / 2))
+    return build(rect(x0, y0, x1, y1), {i: ("fillet", r) for i in range(4)} if r > 0 else None)
+
+
 # ── A whole project in one batch ─────────────────────────────────────────────
 
 class Drawing:

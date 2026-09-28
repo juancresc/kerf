@@ -153,7 +153,8 @@ main { display: flex; flex: 1; min-height: 0; }
 #content .hover { stroke-width: 2px; }
 #hits * { stroke: transparent; fill: transparent; }
 #canvas.tool-select #hits * { cursor: move; }
-#canvas:not(.tool-select) #hits { display: none; }
+#canvas:not(.tool-select):not(.tool-fillet):not(.tool-dogbone) #hits { display: none; }
+#canvas.tool-fillet #hits *, #canvas.tool-dogbone #hits * { cursor: crosshair; }
 #overlay * { pointer-events: none; }
 .sel-box { fill: none; stroke: var(--accent); stroke-dasharray: 4 3; }
 .marquee { fill: rgba(59,130,246,.08); stroke: var(--accent); }
@@ -495,6 +496,7 @@ dialog.wide { min-width: 560px; }
 .layer-row .layer-name { padding: 5px 4px; font-size: 12px; }
 .layer.active { box-shadow: inset 3px 0 0 var(--accent); }
 .layer.active .layer-name { font-weight: 600; }
+.layer.has-selection .layer-name::after { content: ' ●'; color: var(--accent); font-size: 9px; vertical-align: middle; }
 .icon-btn.small { width: 22px; height: 22px; }
 
 /* Collapsible panels */

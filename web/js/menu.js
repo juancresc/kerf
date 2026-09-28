@@ -241,8 +241,13 @@ export function updateToolbar() {
 
 const TOOLS = [
   ['select', 'Select / move (V) — double-click an entity to edit inside'], ['pan', 'Pan (H, or hold Space)'],
-  ['line', 'Line (L) — Shift: 45°'], ['rect', 'Rectangle (R) — Shift: square'],
-  ['circle', 'Circle (C)'], ['ellipse', 'Ellipse (E) — Shift: circle'], ['text', 'Text (T)'],
+  ['line', 'Line (L) — Shift: 45°'], ['rect', 'Rectangle (R) — Shift: square; type a radius for round corners'],
+  ['circle', 'Circle (C)'], ['ellipse', 'Ellipse (E) — Shift: circle'],
+  ['slot', 'Slot (S) — drag the centre line; type length, angle, width'],
+  ['outline', 'Outline (O) — click the corners; Enter, double-click or the first corner closes it. Type a corner radius'],
+  ['fillet', 'Fillet (F) — click a corner to round it; Shift-click: all corners. Type the radius'],
+  ['dogbone', 'Dog-bone (B) — click a corner; Shift-click: every corner of a hole / inside corner of an outline. Type the tool Ø'],
+  ['text', 'Text (T)'],
   ['measure', 'Measure (M) — drag between points; snaps to corners/ends/centres. Enter: add as dimension'],
 ];
 const toolsBox = document.getElementById('tools');
@@ -255,7 +260,8 @@ on('tool', () => toolsBox.querySelectorAll('.tool').forEach(b => b.classList.tog
 
 // ── Keyboard ───────────────────────────────────────────────
 
-const TOOL_KEYS = { v: 'select', h: 'pan', l: 'line', r: 'rect', c: 'circle', e: 'ellipse', t: 'text', m: 'measure' };
+const TOOL_KEYS = { v: 'select', h: 'pan', l: 'line', r: 'rect', c: 'circle', e: 'ellipse', t: 'text', m: 'measure',
+                    s: 'slot', o: 'outline', f: 'fillet', b: 'dogbone' };
 
 document.addEventListener('keydown', (e) => {
   if (document.querySelector('dialog[open]')) return;
@@ -285,8 +291,9 @@ document.addEventListener('keydown', (e) => {
   if (e.target.matches('select') && e.key.startsWith('Arrow')) return;
   if (e.key === ' ') { e.preventDefault(); canvas.setSpace(true); return; }
   if (e.key === 'Escape') return canvas.cancel();
-  if (canvas.isDrawing() && /^[0-9.,]$/.test(e.key)) { e.preventDefault(); return canvas.beginNumericEntry(e.key); }
-  if (canvas.isDrawing() && e.key === 'Tab') { e.preventDefault(); return canvas.beginNumericEntry(''); }
+  const typable = canvas.isDrawing() || canvas.hasToolOptions();
+  if (typable && /^[0-9.,]$/.test(e.key)) { e.preventDefault(); return canvas.beginNumericEntry(e.key); }
+  if (typable && e.key === 'Tab') { e.preventDefault(); return canvas.beginNumericEntry(''); }
   if (e.key === 'Enter' && canvas.isDrawing()) return canvas.commitDraw();
   if (e.key === 'Enter') {
     if (app.tool === 'measure' && canvas.currentMeasure()) return actions.addDimension();

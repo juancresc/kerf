@@ -169,10 +169,25 @@ on('drafting', (d) => {
   if (!d) return;
   const a = d.attrs;
   if (d.hint) { st('selection').textContent = 'click the end point, or type the size (Tab / Enter)'; return; }
-  st('selection').textContent = d.tool === 'line' ? `length ${fmt(Math.hypot(a.x2 - a.x1, a.y2 - a.y1))} mm`
+  if (d.tool === 'outline') {
+    st('selection').textContent = `${a.n} corner(s)${a.radius ? `, radius ${fmt(a.radius)} mm` : ''} — click the next corner; Enter / double-click / first corner closes; type a radius`;
+    return;
+  }
+  st('selection').textContent = d.tool === 'slot' ? `slot ${fmt(Math.hypot(a.x2 - a.x1, a.y2 - a.y1) + a.width)} × ${fmt(a.width)} mm (type length, angle, width)`
+    : d.tool === 'line' ? `length ${fmt(Math.hypot(a.x2 - a.x1, a.y2 - a.y1))} mm`
     : d.tool === 'rect' ? `${fmt(a.width)} × ${fmt(a.height)} mm`
     : d.tool === 'circle' ? `⌀ ${fmt(2 * a.r)} mm` : `${fmt(2 * a.rx)} × ${fmt(2 * a.ry)} mm`;
 });
+
+// Corner tools: show the value they'll use
+function cornerToolHint() {
+  const o = canvas.toolOpts, tool = app.doc?.material?.tool_diameter || 6;
+  if (app.tool === 'fillet') st('selection').textContent = `fillet r ${fmt(o.fillet)} mm — click a corner (Shift: all corners) · type to change`;
+  else if (app.tool === 'dogbone') st('selection').textContent = `dog-bone Ø ${fmt(o.dogbone || tool)} mm — click a corner (Shift: every corner of a hole / inside corner) · type to change`;
+  else if (app.tool === 'outline' && o.radius) st('selection').textContent = `outline, corner radius ${fmt(o.radius)} mm — click the first corner`;
+}
+on('tool', cornerToolHint);
+on('tool-options', cornerToolHint);
 
 let measureInfo = null;
 on('measure', (m) => { measureInfo = m; updateStatus(); });

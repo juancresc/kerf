@@ -20,7 +20,7 @@ SVG_NS = "http://www.w3.org/2000/svg"
 INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
 SHAPE_TAGS = ("line", "rect", "circle", "ellipse", "text", "path", "polygon", "polyline")
 # Attributes owned by the layer or by the model itself
-LAYER_OWNED = {"stroke", "stroke-dasharray", "stroke-linecap", "id", "data-layer", "data-group", "style"}
+LAYER_OWNED = {"stroke", "stroke-dasharray", "stroke-linecap", "id", "data-layer", "data-group", "data-name", "style"}
 
 LINE_STYLES = {"solid": "", "dashed": "6 3", "dotted": "0.5 2.5"}
 HEX_COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -53,6 +53,7 @@ class Element:
     attrs: dict[str, str] = field(default_factory=dict)
     text: str = ""
     group: str | None = None       # id of the group ("entity") it belongs to
+    name: str = ""                 # optional label (UI, lists); not exported to CNC
 
 
 @dataclass
@@ -246,7 +247,7 @@ class Document:
 
     # ── elements ───────────────────────────────────────────
     def add_element(self, tag: str, attrs: dict, text: str = "", layer: str | None = None,
-                    group: str | None = None) -> Element:
+                    group: str | None = None, name: str = "") -> Element:
         check_attr_names(attrs)
         if tag not in SHAPE_TAGS:
             raise DocError(f"Unsupported tag '{tag}'. Use one of: {', '.join(SHAPE_TAGS)}")
@@ -254,12 +255,12 @@ class Document:
         self.layer(layer)
         if group:
             self.group_by_id(group)
-        el = Element(self.new_id(), tag, layer, clean_attrs(attrs), text or "", group or None)
+        el = Element(self.new_id(), tag, layer, clean_attrs(attrs), text or "", group or None, clean_name(name))
         self.elements.append(el)
         return el
 
     def update_element(self, eid: str, attrs: dict | None = None, text: str | None = None,
-                       layer: str | None = None) -> Element:
+                       layer: str | None = None, name: str | None = None) -> Element:
         el = self.element(eid)
         if attrs is not None and not isinstance(attrs, dict):
             raise DocError("attrs must be an object")
@@ -273,6 +274,8 @@ class Document:
                 el.attrs[k] = str(v)
         if text is not None:
             el.text = text
+        if name is not None:
+            el.name = clean_name(name)
         if layer:
             self.layer(layer)
             el.layer = layer
@@ -562,6 +565,7 @@ class Document:
             e.attrs = clean_attrs(e.attrs if isinstance(e.attrs, dict) else {})
             e.text = str(e.text or "")
             e.group = e.group if e.group in gids else None
+            e.name = clean_name(e.name)
             elements.append(e)
         self.elements = elements
         self._fix_next_id()
@@ -727,13 +731,15 @@ class Document:
                     eid = ""
                 used_ids.add(eid)
                 gid = group_map.get(child.get("data-group") or "")
+                label = clean_name(child.get("data-name"))
                 lines = text_lines(child) if tag == "text" else None
                 if lines:  # multi-line text (positioned <tspan>s): one text element per line
                     for i, (line_attrs, line) in enumerate(lines):
                         doc.elements.append(Element(eid if i == 0 else "", tag, name,
-                                                    clean_attrs({**attrs, **line_attrs}), line, gid))
+                                                    clean_attrs({**attrs, **line_attrs}), line, gid, label))
                     continue
-                el = Element(eid, tag, name, clean_attrs(attrs), "".join(child.itertext()) if tag == "text" else "", gid)
+                el = Element(eid, tag, name, clean_attrs(attrs), "".join(child.itertext()) if tag == "text" else "", gid,
+                             label)
                 doc.elements.append(el)
 
         walk(root, fallback, root_transform)
@@ -757,6 +763,8 @@ def element_svg(e: Element, layer: Layer, with_id: bool = True, with_group: bool
     attrs = dict(e.attrs)
     if with_group and e.group:
         attrs["data-group"] = e.group
+    if with_group and e.name:
+        attrs["data-name"] = e.name
     if e.tag == "text":
         attrs.setdefault("fill", layer.color)
         if attrs.get("fill") not in ("none",):
@@ -790,6 +798,11 @@ def check_attr_names(attrs: dict | None):
     bad = [k for k in (attrs or {}) if not valid_attr_name(str(k))]
     if bad:
         raise DocError(f"Invalid attribute name(s): {', '.join(map(repr, bad))}")
+
+
+def clean_name(name) -> str:
+    """Element name: one line of plain text, up to 80 characters ("" = unnamed)."""
+    return " ".join(str(name or "").split())[:80]
 
 
 def clean_attrs(attrs: dict) -> dict:
