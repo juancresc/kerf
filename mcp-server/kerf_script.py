@@ -69,6 +69,34 @@ def assembly_report(tab):
     return call(f"assembly?tab={tab}")
 
 
+def structure(tab, params=None, loads=None, push_height=None):
+    """The same as the describe_structure tool for one slider position: weight per part, total,
+    centre of mass, stability (footprint, tip angles, tip force). loads: [{"part", "kg"}]."""
+    return call("structure", {"tab": tab, "params": params, "loads": loads, "push_height": push_height})
+
+
+def generator(script=None, command=None, env=()):
+    """A record of the script that makes a project, stored in the .kerf for reference (never run):
+    {path, command, sha256, generated, source}. script: its file (default: the running script);
+    path is relative to the nearest "data" folder above it (the editor's data dir), else its name.
+    env: environment variables worth recording in the command, e.g. ("DESK_LAYOUT",)."""
+    import __main__
+    import datetime
+    import hashlib
+    import sys
+    script = os.path.abspath(script or getattr(__main__, "__file__", "") or sys.argv[0])
+    with open(script, "rb") as fh:
+        raw = fh.read()
+    parts = script.replace(os.sep, "/").split("/")
+    path = "/".join(parts[len(parts) - parts[::-1].index("data"):]) if "data" in parts[:-1] else parts[-1]
+    if command is None:
+        vars_ = [f"{k}={os.environ[k]}" for k in env if os.environ.get(k)]
+        command = " ".join([*vars_, "python3", path, *sys.argv[1:]])
+    return {"path": path, "command": command, "sha256": hashlib.sha256(raw).hexdigest(),
+            "generated": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+            "source": raw.decode("utf-8", errors="replace")}
+
+
 def layer(name, color, line_style="solid", export=True, depth=None, description=""):
     """add_layer op that also works when the layer exists (it is updated), so scripts can re-run."""
     return {"op": "add_layer", "name": name, "color": color, "line_style": line_style, "export": export,
@@ -286,12 +314,20 @@ class Drawing:
     placement doesn't depend on where they end up on the drawing.
     """
 
-    def __init__(self, title, thickness=18, material=None, sheet=(2440, 1220), tool=6):
+    def __init__(self, title, thickness=18, material=None, sheet=(2440, 1220), tool=6, script=True):
+        """script: record the running script in the project (see generator()); False = don't,
+        a path or a generator() dict = that one."""
         self.title, self.thickness = title, thickness
         mat = {"name": f"Birch plywood {thickness:g} mm", "type": "plywood", "color": "#e3c592",
                "thickness": thickness, "sheet_width": sheet[0], "sheet_height": sheet[1], "tool_diameter": tool}
         mat.update(material or {})
         self.ops = [{"op": "clear"}, {"op": "set_title", "title": title}, {"op": "set_material", "material": mat}]
+        if script:
+            try:
+                gen = script if isinstance(script, dict) else generator(None if script is True else script)
+            except OSError:               # no script file (interactive session, stdin)
+                gen = None
+            self.ops.append({"op": "set_generator", "generator": gen})
         self.parts = {}                 # name → {"id": "$ref", "assembly", "points" (drawing coords)}
         self.problems = []
         self.report = None
@@ -307,12 +343,14 @@ class Drawing:
 
     def part(self, name, outline, holes=(), pockets=None, circles=(), rotation=None, position=(0, 0, 0),
              qty=1, color=None, thickness=None, move=None, label=True, at=None, turn=0, layer="CUT_OUTSIDE",
-             matrix=None):
+             matrix=None, mass=None, capacity=None, material=None):
         """One part: outline (build() segments or a vertex list) on `layer`, holes (CUT_INSIDE),
         pockets {layer: [outlines]}, circles [((x, y), diameter[, layer])], a name label on NOTES,
         qty and — when rotation is given — its 3D placement (see the guide's recipes). at=(X, Y)
         puts the footprint's top-left there on the drawing (turn 0/90/180/270), else it goes in a
-        row for arrange(). Returns the entity reference ("$name") for later ops."""
+        row for arrange(). mass (kg) / capacity (kg rating) / material {type, name, density} go
+        into the 3D placement for describe_structure (bought parts: casters, a back panel).
+        Returns the entity reference ("$name") for later ops."""
         if name in self.parts:
             raise ValueError(f"Two parts called {name!r}")
         seg = lambda o: o if o and o[0][0] == "M" else build(o)
@@ -354,6 +392,9 @@ class Drawing:
                 asm["color"] = color
             if move:
                 asm["move"] = move
+            for k_, v_ in (("mass", mass), ("capacity", capacity), ("material", material)):
+                if v_:
+                    asm[k_] = v_
             upd["assembly"] = asm
         self.ops.append(upd)
         pts = [f(p) for p in points(outline)]

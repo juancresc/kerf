@@ -3,8 +3,8 @@
 import { app, emit, setSelection, selectedElements, elementById, selectedItems, selectItems, elementsOf,
          groupById, setContext, setTabView } from './state.js';
 import { api } from './api.js';
-import { modal, confirmDialog, toast, esc, download, pickFile, fmt, copyText } from './ui.js';
-import { moveAttrs, docToPng } from './geometry.js';
+import { modal, confirmDialog, toast, esc, download, pickFile, fmt, copyText, printPage } from './ui.js';
+import { moveAttrs, docToPng, docToSvg } from './geometry.js';
 import * as canvas from './canvas.js';
 import { PRESETS as MATERIAL_PRESETS } from './materials.js';
 
@@ -419,6 +419,22 @@ export async function exportPng() {
   c.toBlob(b => download(b, `${app.server.name}.png`), 'image/png');
 }
 
+/** Print just the view, for reference in the shop: the 3D view as it is on screen (white
+ *  background, no selection highlight), or the drawing's visible layers (no reference image). */
+export async function printView() {
+  const title = app.server.name || 'Kerf';
+  if (app.view === '3d') {
+    const { printImage } = await import('./preview3d.js');
+    const shot = await printImage();
+    if (!shot) return toast('Nothing to print in 3D', 'error');
+    return printPage(`<img src="${shot.data}" alt="">`, { landscape: shot.landscape, title });
+  }
+  if (!app.doc?.elements.length) return toast('Nothing to print', 'error');
+  const svg = docToSvg(app.doc, { background: false })
+    .replace(/^<svg ([^>]*?)width="[^"]*" height="[^"]*"/, '<svg $1width="100%" height="100%"');
+  return printPage(svg, { landscape: app.doc.width >= app.doc.height, title });
+}
+
 /** The project's name (shown on its tab, saved inside the file) — separate from the file name. */
 export async function renameProject() {
   const s = app.server;
@@ -452,6 +468,7 @@ export async function materialDialog() {
       <label>Sheet (mm)</label><div class="pair"><input name="sheet_width" type="number" step="any" class="field" value="${m.sheet_width ?? 2440}">
         <input name="sheet_height" type="number" step="any" class="field" value="${m.sheet_height ?? 1220}"></div>
       <label>Tool Ø (mm)</label><input name="tool_diameter" type="number" step="any" class="field" value="${m.tool_diameter ?? 6}">
+      <label>Density (kg/m³)</label><input name="density" type="number" step="any" min="0" class="field" value="${m.density ?? ''}" placeholder="auto (from name/type)">
       <label>Notes</label><textarea name="notes" class="field" placeholder="Supplier, grain direction, feeds…">${esc(m.notes || '')}</textarea>
     </div>
     <p class="hint" style="margin-top:8px">Saved in the project. Thickness and colour are used by the 3D preview; sheet size and tool Ø by the CNC checks.</p>`,
@@ -465,7 +482,7 @@ export async function materialDialog() {
     onSubmit: (form) => {
       v = { name: form.name.value.trim(), type: form.type.value, thickness: +form.thickness.value, color: form.color.value,
             sheet_width: +form.sheet_width.value, sheet_height: +form.sheet_height.value,
-            tool_diameter: +form.tool_diameter.value, notes: form.notes.value };
+            tool_diameter: +form.tool_diameter.value, notes: form.notes.value, density: +form.density.value || '' };
       return v.thickness > 0;
     },
   });

@@ -44,10 +44,37 @@ export const icons = {
   group: P('<rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/><path d="M2 2h20v20H2z" stroke-dasharray="2 2"/>'),
   ungroup: P('<rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/>'),
   dims: P('<path d="M3 7h18M3 4v6M21 4v6M7 21V11M4 11h6M4 21h6"/>'),
+  print: P('<path d="M7 9V3h10v6M7 17H5a2 2 0 01-2-2v-4a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2h-2"/><rect x="7" y="14" width="10" height="7"/>'),
   cube: P('<path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 12l9-5M12 12v10M12 12L3 7"/>'),
   side: P('<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/>'),
   measure: P('<path d="M3 17L17 3l4 4L7 21z"/><path d="M7 13l2 2M10 10l2 2M13 7l2 2"/>'),
 };
+
+/** Print one image or SVG alone, fitted to the page (no UI, no title block), via a hidden iframe. */
+export async function printPage(body, { landscape = true, title = '' } = {}) {
+  const f = document.createElement('iframe');
+  f.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden';
+  document.body.appendChild(f);
+  const d = f.contentDocument;
+  d.open();
+  d.write(`<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>
+    @page { size: A4 ${landscape ? 'landscape' : 'portrait'}; margin: 8mm; }
+    html, body { margin: 0; background: #fff; }
+    .page { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+    .page > img { width: 100%; height: 100%; object-fit: contain; }
+    .page > svg { width: 100%; height: 100%; }
+  </style></head><body><div class="page">${body}</div></body></html>`);
+  d.close();
+  const img = d.querySelector('img');
+  if (img) await img.decode().catch(() => {});
+  const w = f.contentWindow;
+  let done = false;
+  const cleanup = () => { if (!done) { done = true; setTimeout(() => f.remove(), 100); } };
+  w.addEventListener('afterprint', cleanup);
+  setTimeout(cleanup, 120000);               // in case afterprint never fires
+  w.focus();
+  w.print();
+}
 
 export function esc(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

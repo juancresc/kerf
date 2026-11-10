@@ -61,7 +61,8 @@ class Group:
     """A named entity (e.g. one part: outline + holes, possibly on several layers).
     Groups can contain groups (parent). `qty` is for nesting/exports; `assembly` places the
     part in 3D: {"matrix": [a,b,c,d,e,f] doc→part 2D, "thickness", "position": [x,y,z],
-    "rotation": [rx,ry,rz] degrees, "color", "move": {"param", "axis"}}."""
+    "rotation": [rx,ry,rz] degrees, "color", "material": {"type", "name", "density"} (this part's own),
+    "mass" (kg, for bought parts), "move": {"param", "axis"}}."""
     id: str
     name: str
     parent: str | None = None
@@ -90,7 +91,8 @@ DEFAULT_MATERIAL = {
     "tool_diameter": 6,        # end mill, mm (for CAM notes / minimum inside radius)
     "notes": "",
 }
-MATERIAL_NUMBERS = ("thickness", "sheet_width", "sheet_height", "tool_diameter")
+MATERIAL_NUMBERS = ("thickness", "sheet_width", "sheet_height", "tool_diameter", "density")   # density kg/m³ (optional)
+MATERIAL_TYPES = ("plywood", "wood", "board", "plastic", "metal", "foam", "other")   # = web/js/materials.js
 
 
 def clean_title(t) -> str:
@@ -101,6 +103,9 @@ def clean_title(t) -> str:
 def clean_material(m: dict | None, base: dict | None = None) -> dict:
     out = dict(base or DEFAULT_MATERIAL)
     for k, v in (m or {}).items():
+        if k == "density" and v in (None, "", 0):      # empty = guess from the name/type
+            out.pop("density", None)
+            continue
         if k in MATERIAL_NUMBERS:
             try:
                 v = float(v)
@@ -160,11 +165,31 @@ def clean_assembly(a, strict=False):
             if not HEX_COLOR.match(str(a["color"])):
                 raise DocError("color must be #rrggbb")
             out["color"] = a["color"]
+        if a.get("mass") not in (None, ""):      # kg, for bought parts (motors, casters…)
+            m = float(a["mass"])
+            if not 0 < m <= 100000:
+                raise DocError("mass must be > 0 kg")
+            out["mass"] = num(m)
+        if a.get("capacity") not in (None, ""):  # kg a caster / foot is rated for
+            c = float(a["capacity"])
+            if not 0 < c <= 1000000:
+                raise DocError("capacity must be > 0 kg")
+            out["capacity"] = num(c)
         if a.get("move"):
             m = a["move"]
             if not isinstance(m, dict) or not re.fullmatch(r"[A-Za-z_]\w{0,39}", str(m.get("param", ""))):
                 raise DocError("move must be {param, axis}")
             out["move"] = {"param": m["param"], "axis": _numbers(m.get("axis", [0, 1, 0]), 3)}
+        if a.get("material"):   # this part's own material (3D look), instead of the project's
+            m = a["material"]
+            if not isinstance(m, dict) or m.get("type") not in MATERIAL_TYPES:
+                raise DocError(f"material type must be one of {', '.join(MATERIAL_TYPES)}")
+            out["material"] = {"type": m["type"], **({"name": clean_title(m["name"])[:60]} if m.get("name") else {})}
+            if m.get("density") not in (None, ""):
+                d = float(m["density"])
+                if not 0 < d <= 100000:
+                    raise DocError("material density must be > 0 kg/m³")
+                out["material"]["density"] = num(d)
         return out
     except (DocError, TypeError, ValueError) as e:
         if strict:
@@ -187,6 +212,29 @@ def clean_params(params) -> list[dict]:
         if q["max"] <= q["min"] or q["step"] <= 0:
             continue
         out.append(q)
+    return out
+
+
+GENERATOR_SOURCE_MAX = 1_000_000
+
+
+def clean_generator(g) -> dict | None:
+    """The script that generated the project, kept for reference and never run:
+    {path, command, sha256, generated, source}. Anything else is dropped."""
+    if not isinstance(g, dict):
+        return None
+    path = str(g.get("path") or "").replace("\\", "/").strip()
+    if not re.fullmatch(r"[\w .()\-]+(/[\w .()\-]+)*", path) or ".." in path.split("/"):
+        return None
+    out = {"path": path[:300], "command": " ".join(str(g.get("command") or "").split())[:300]}
+    sha = str(g.get("sha256") or "").lower()
+    if re.fullmatch(r"[0-9a-f]{64}", sha):
+        out["sha256"] = sha
+    when = str(g.get("generated") or "")
+    if re.fullmatch(r"[0-9T:.+\-Z ]{10,40}", when):
+        out["generated"] = when
+    if isinstance(g.get("source"), str):
+        out["source"] = g["source"][:GENERATOR_SOURCE_MAX]
     return out
 
 
@@ -223,6 +271,7 @@ class Document:
     params: list[dict] = field(default_factory=list)   # 3D preview sliders, e.g. desk height
     material: dict = field(default_factory=lambda: dict(DEFAULT_MATERIAL))
     title: str = ""                         # project name, independent of the file name
+    generator: dict | None = None           # the script that made it (clean_generator), never run
 
     # ── lookup ─────────────────────────────────────────────
     def layer(self, name: str) -> Layer:
@@ -488,6 +537,7 @@ class Document:
             "params": self.params,
             "material": self.material,
             "title": self.title,
+            "generator": self.generator,
         }
 
     @classmethod
@@ -501,7 +551,7 @@ class Document:
                   background=d.get("background"), next_id=d.get("next_id", 1),
                   groups=[Group(**{k: v for k, v in g.items() if k in group_keys}) for g in d.get("groups", [])],
                   params=d.get("params", []), material=clean_material(d.get("material")),
-                  title=clean_title(d.get("title")))
+                  title=clean_title(d.get("title")), generator=d.get("generator"))
         doc.sanitize()
         doc._fix_next_id()
         return doc
@@ -573,6 +623,7 @@ class Document:
             if not e.id:
                 e.id = self.new_id()
         self.params = clean_params(self.params)
+        self.generator = clean_generator(self.generator)
         if self.background and not (isinstance(self.background, dict)
                                     and str(self.background.get("href", "")).startswith("data:image/")):
             self.background = None

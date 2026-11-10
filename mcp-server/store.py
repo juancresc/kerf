@@ -17,7 +17,7 @@ import threading
 import time
 from pathlib import Path
 
-from document import Document, DocError, to_native, from_native, clean_material, clean_title
+from document import Document, DocError, to_native, from_native, clean_material, clean_title, clean_generator
 import layout
 import shapes
 
@@ -213,6 +213,10 @@ class Store:
                     bg = doc["background"]
                     doc["background"] = {"opacity": bg.get("opacity", 0.3),
                                          "id": hashlib.sha1(bg["href"].encode()).hexdigest()[:16]}
+                if doc["generator"]:        # the source comes from GET /api/generator
+                    g = dict(doc["generator"])
+                    g["source_lines"] = g.pop("source", "").count("\n") + 1 if "source" in g else 0
+                    doc["generator"] = g
                 s["doc"] = doc
             return s
 
@@ -639,6 +643,12 @@ def apply_op(doc: Document, op: dict):
     if kind == "set_title":
         doc.title = clean_title(op.get("title"))
         return None
+    if kind == "set_generator":
+        g = op.get("generator")
+        doc.generator = clean_generator(g)
+        if g and not doc.generator:
+            raise DocError("Invalid generator: needs a relative path (letters, digits, / . _ - space)")
+        return None
     if kind == "set_material":
         doc.material = clean_material(op.get("material"), doc.material)
         return None
@@ -676,7 +686,7 @@ def describe(ops: list[dict]) -> str:
              "set_background": "Background", "set_background_opacity": "Background opacity",
              "clear": "Clear", "replace_svg": "Edit code", "import_svg": "Import SVG",
              "group": "Group", "ungroup": "Ungroup", "set_group": "Move to entity", "update_group": "Edit entity", "set_params": "Parameters",
-             "set_material": "Material", "set_title": "Rename project", "move": "Move",
+             "set_material": "Material", "set_title": "Rename project", "set_generator": "Generator", "move": "Move",
              "transform": "Transform", "arrange": "Arrange on sheets"}
     kinds = {op.get("op") for op in ops}
     if len(kinds) == 1:

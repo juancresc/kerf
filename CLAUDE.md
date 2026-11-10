@@ -30,12 +30,16 @@ python3 data/desk/generate.py --push   # regenerate the desk and (re)open it in 
 mcp-server/
   document.py  Document model: Layer (colour, line style, lock, export, description, depth),
                Element (id, tag, layer, attrs, text, group), Group ("entity": name, parent, qty,
-               assembly), params, material. SVG read/write ("file" / "cnc"), .kerf (to/from_native).
+               assembly), params, material, generator (the script that made it: path, command,
+               sha256, source; a record, never run). SVG read/write ("file" / "cnc"), .kerf (to/from_native).
   store.py     Store: open documents as Tabs (file, dirty fingerprint, undo/redo, selection),
                apply(ops) = one atomic undo step, files in data/, session autosave, screenshots.
   layout.py    parts on the drawing: reposition() (move/transform keeping assembly matrices in sync),
                default_matrix, pieces(), arrange() (MaxRects onto SHEETS), layout_issues (overlap, too
                close, off sheet), assembly_report (world boxes, clashes by sampling part solids).
+  structure.py weight (volume × density or assembly.mass), centre of mass, stability (floor footprint,
+               tip angle and tip force per direction), loads, slider min/max, strength (horizontal
+               panels as beams: span from supporting parts, sag, % of breaking stress; caster ratings).
   shapes.py    exact shape geometry (lines + arcs) for the shape ops: slot, rounded rect, outline with a
                radius per corner, fillet / dog-bone of an existing shape (keeps its other arcs); uses
                kerf_script.build()/to_path().
@@ -61,11 +65,14 @@ web/js/
                Shape tools send the server's shape ops; the browser only previews.
   panels.js    Layers (depth, export, …), Entities tree, Inspector (shape / entity + 3D placement /
                document + Material & stock)
-  actions.js   file (tabs, Open/Save As browser, computer files), import/export, edit, entities
+  actions.js   file (tabs, Open/Save As browser, computer files), import/export, edit, entities,
+               printView (⌘P: just the 3D view or the drawing, for the carpenter; ui.printPage)
   menu.js      menus (File/Edit/View/Layer/Export), toolbar, tool palette, shortcuts
   tabs.js      document tabs + 3D preview tabs
   preview3d.js three.js assembly: extrude entities (CUT_OUTSIDE outline, CUT_INSIDE holes,
-               pockets from layers with depth), place with assembly, sliders, GLB/STL export
+               pockets from layers with depth), place with assembly, sliders, GLB/STL export,
+               floating tool bar (arrow = rotate, hand = move, reset, print), printImage(),
+               Structure overlay (POST /api/structure: CoM ball, footprint, tip edge, loads, weight table)
   materials.js material presets
   textures.js  procedural canvas textures by material type (grain, plywood plies on cut edges, MDF,
                brushed metal, clear acrylic), mm UVs, Textures toggle in the 3D panel
@@ -85,10 +92,10 @@ data/          projects (*.kerf), imports (.svg/.dxf), exports/, .session.json (
     drag and nudge use the `move` op for that reason; don't move parts with raw update_element.
   - `thickness` is the extrusion along local +Z; the top face at z = thickness is the router face, where pockets are cut.
   - `rotation` is in degrees (Euler XYZ); `position` is in world mm (X width, Y up, Z toward the viewer).
-  - optional `color`, and `move: {param, axis}` tied to a doc `params` slider.
+  - optional `color`, `material {type, name, density}`, `mass` (kg, bought parts), `capacity` (kg rating of a caster/foot), and `move: {param, axis}` tied to a doc `params` slider.
   - Opposite-hand parts with pockets must be drawn mirrored (see the desk's lower frame B).
 - Older `.svgcnc` files (the format's first name) still open; saving writes `.kerf`.
-- `material` holds name, type, thickness, colour, sheet size, tool Ø and notes. It supplies the default thickness and colour in 3D.
+- `material` holds name, type, thickness, colour, sheet size, tool Ø, optional density (kg/m³) and notes. It supplies the default thickness and colour in 3D.
 
 ### Store / sync
 - All edits go through `Store.apply(ops)`: the browser always names its tab, and MCP tools use the active tab. Within a batch, `"$n"` in items/id/ids/group/parent refers to the result of op n, and `"$name"` to the op with `"as": "name"`, so a whole part (shapes + group) is one undo step. Errors say which op failed. Ops:
@@ -98,7 +105,7 @@ data/          projects (*.kerf), imports (.svg/.dxf), exports/, .session.json (
   - document: `set_size, set_background(_opacity), clear, replace_svg, import_svg, set_material, set_params`;
   - entities: `group, ungroup, update_group, set_group` (move items into an entity or out of it);
   - layout: `move {items,dx,dy}`, `transform {items,transform}`, `arrange {sheet_width,sheet_height,margin,gap,rotate,notes}`;
-  - `set_title` (the project name).
+  - `set_title` (the project name), `set_generator` (record of the generating script; `clear` keeps it).
 - Undo/redo and dirty tracking are per tab. Visibility is view state: not undoable, doesn't make the file dirty.
 - `dirty` means the content fingerprint differs from the last save/open. Rapid single-field edits coalesce into one undo step.
 - Each state response carries the active tab's doc. The reference image is only an id; the image itself comes from `GET /api/background`.
@@ -112,7 +119,7 @@ The compose file publishes both ports on 127.0.0.1 only. The `local_only` middle
 - **Editing:** `POST /api/ops {ops,label}` · `POST /api/undo|redo`.
 - **Files and tabs:** `POST /api/file/new|open|close|activate|revert|save|saved-local|mkdir|delete|import` (import takes `svg | dxf (base64) | project`) · `GET /api/files` · `GET /api/browse?folder=`.
 - **Exports:** `GET /api/export/{cnc|cnc-dxf|parts|sheets|file|project}`.
-- **Scripts:** `GET /api/script` (kerf_script.py) · `GET /api/check?tab=` (check_cnc for any tab) · `GET /api/assembly?tab=` (describe_assembly). `add_layer` takes `exist_ok` (update instead of failing) so generators can re-run.
+- **Scripts:** `GET /api/script` (kerf_script.py) · `GET /api/generator?tab=` (stored generator + source, and whether data/<path> still matches) · `GET /api/check?tab=` (check_cnc for any tab) · `GET /api/assembly?tab=` (describe_assembly) · `POST /api/structure {tab, params, loads, push_height}` (describe_structure). `add_layer` takes `exist_ok` (update instead of failing) so generators can re-run.
 - **Other:** `POST /api/selection` · `POST /api/screenshot` · `GET /api/background` · `GET /api/guide`.
 
 ## MCP tools (server `kerf`, SSE on :8766)
@@ -120,10 +127,11 @@ The compose file publishes both ports on 127.0.0.1 only. The `local_only` middle
 The server also sends workflow instructions to the client (`INSTRUCTIONS` in server.py).
 
 - **Projects/tabs:** `get_document_info, list_documents, list_files, list_tabs, switch_tab, new_document, open_document, save_document, close_document, revert_document, set_project_name, set_canvas_size, set_material, undo, redo`
+- **Generator:** `get_generator` (the script that made the project; `get_document_info` shows its path/status)
 - **Guide:** `get_guide(topic)`: workflow, layers, 3D placement recipes, CNC rules (also `GET /api/guide`, Help → Kerf guide). Keep `mcp-server/guide.md` up to date when conventions change.
 - **Shapes:** `add_slot, add_rounded_rect, add_outline, fillet_corners, add_dogbones` (exact arcs; corners by index or clicked [x, y])
 - **Elements:** `list_elements, add_element, add_svg` (many shapes at once, one undo step), `update_element, remove_element, set_element_layer, move_elements, transform_elements, duplicate, reorder, clear_document, get_svg`
-- **Entities/3D:** `list_groups, group_elements, ungroup, update_group` (name, qty, assembly), `move_to_entity`, `set_params`, `describe_assembly` (world boxes, clashes)
+- **Entities/3D:** `list_groups, group_elements, ungroup, update_group` (name, qty, assembly), `move_to_entity`, `set_params`, `describe_assembly` (world boxes, clashes), `describe_structure` (weight, centre of mass, tip-over, shelf strength; 3D panel → Structure)
 - **Sheets:** `arrange_parts` (pack pieces onto sheets, SHEETS layer, notes block; 3D unchanged)
 - **Layers:** `list_layers, add_layer, update_layer, remove_layer, move_layer` (with `depth` for pockets)
 - **Measure/selection:** `measure, add_dimension, get_selection, set_selection`

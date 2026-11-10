@@ -22,24 +22,6 @@ function snippets({ editor_url, api_url, mcp_url, token }) {
   const server = { type: 'sse', url: mcp_url, ...(auth ? { headers: { Authorization: auth } } : {}) };
   return [
     {
-      id: 'code', label: 'Claude Code',
-      intro: 'Run this in a terminal once. Then start <code>claude</code> and check the connection with <code>/mcp</code>.',
-      text: `claude mcp add --transport sse kerf ${mcp_url}${auth ? ` --header ${q('Authorization: ' + auth)}` : ''}`,
-      prompt: MCP_PROMPT(editor_url),
-    },
-    {
-      id: 'project', label: '.mcp.json',
-      intro: 'Or save this as <code>.mcp.json</code> in a project folder, so everyone who runs Claude Code there gets the editor.',
-      text: json({ mcpServers: { kerf: server } }),
-      prompt: MCP_PROMPT(editor_url),
-    },
-    {
-      id: 'desktop', label: 'Claude Desktop',
-      intro: 'Claude Desktop → Settings → Developer → Edit Config (<code>claude_desktop_config.json</code>). Add this and restart it. It needs Node.js: <code>mcp-remote</code> bridges the SSE server.',
-      text: json({ mcpServers: { kerf: { command: 'npx', args: ['-y', 'mcp-remote', mcp_url, ...(auth ? ['--header', `Authorization: ${auth}`] : [])] } } }),
-      prompt: MCP_PROMPT(editor_url),
-    },
-    {
       id: 'curl', label: 'Prompt (curl, no MCP)',
       intro: 'No MCP set up? Paste this into Claude (any version that can run shell commands). It explains the HTTP API.',
       text: `${ASK}
@@ -73,6 +55,24 @@ Exports:                curl -s${curlAuth} ${api_url}/export/cnc (SVG in mm) · 
 Rules: part outlines on CUT_OUTSIDE, holes/slots on CUT_INSIDE, pockets on a layer with a depth, labels on NOTES.
 Use fill="none"; never set stroke colours (the layer decides). Group each part's outline + holes into an entity.
 Don't discard my unsaved work or close my tabs without asking.`,
+    },
+    {
+      id: 'code', label: 'Claude Code',
+      intro: 'Run this in a terminal once. Then start <code>claude</code> and check the connection with <code>/mcp</code>.',
+      text: `claude mcp add --transport sse kerf ${mcp_url}${auth ? ` --header ${q('Authorization: ' + auth)}` : ''}`,
+      prompt: MCP_PROMPT(editor_url),
+    },
+    {
+      id: 'project', label: '.mcp.json',
+      intro: 'Or save this as <code>.mcp.json</code> in a project folder, so everyone who runs Claude Code there gets the editor.',
+      text: json({ mcpServers: { kerf: server } }),
+      prompt: MCP_PROMPT(editor_url),
+    },
+    {
+      id: 'desktop', label: 'Claude Desktop',
+      intro: 'Claude Desktop → Settings → Developer → Edit Config (<code>claude_desktop_config.json</code>). Add this and restart it. It needs Node.js: <code>mcp-remote</code> bridges the SSE server.',
+      text: json({ mcpServers: { kerf: { command: 'npx', args: ['-y', 'mcp-remote', mcp_url, ...(auth ? ['--header', `Authorization: ${auth}`] : [])] } } }),
+      prompt: MCP_PROMPT(editor_url),
     },
   ];
 }

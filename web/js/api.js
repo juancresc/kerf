@@ -99,6 +99,7 @@ export const api = {
   browse: (folder = '') => request('GET', '/api/browse?folder=' + encodeURIComponent(folder)),
   exportText: (kind) => fetch('/api/export/' + kind).then(r => r.ok ? r.text() : Promise.reject(new Error(r.statusText))),
   screenshot: (image) => request('POST', '/api/screenshot', { image }),
+  structure: (body) => request('POST', '/api/structure', { tab: app.server?.active, ...body }),
 };
 
 export async function startSync() {

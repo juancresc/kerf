@@ -198,3 +198,20 @@ def test_shape_tools(srv, tmp_path):
     assert not kinds & {"open_contour", "duplicate", "invalid_geometry"}
     dxf = j(srv.export_cnc(format="dxf"))
     assert "error" not in dxf
+
+
+def test_generator_info_reports_whether_the_script_changed(srv, tmp_path):
+    import hashlib
+    src = "print('desk')\n"
+    (tmp_path / "desk").mkdir()
+    (tmp_path / "desk" / "generate.py").write_text(src)
+    assert j(srv.get_generator())["generator"] is None and j(srv.get_document_info())["generator"] is None
+    srv.store.apply([{"op": "set_generator", "generator": {"path": "desk/generate.py", "command": "python3 desk/generate.py",
+                                                           "sha256": hashlib.sha256(src.encode()).hexdigest(), "source": src}}])
+    info = j(srv.get_document_info())["generator"]
+    assert info["status"] == "same" and info["has_source"] and "source" not in info
+    assert j(srv.get_generator())["source"] == src
+    (tmp_path / "desk" / "generate.py").write_text(src + "# edited\n")
+    assert j(srv.get_generator())["status"] == "changed"
+    srv.store.apply([{"op": "set_generator", "generator": {"path": "elsewhere/gen.py"}}])
+    assert j(srv.get_generator())["status"] == "missing"

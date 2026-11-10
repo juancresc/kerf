@@ -89,6 +89,8 @@ const MENUS = [
     ['Remove reference image', actions.removeBackground, null, () => !!app.doc?.background],
   ]],
   ['Export', [
+    [() => app.view === '3d' ? 'Print 3D view (for the carpenter)…' : 'Print drawing (for the carpenter)…', actions.printView, MOD + 'P'],
+    '-',
     ['# For the CNC'],
     ['CNC file — SVG (mm)', actions.exportCnc, MOD + 'E'],
     ['CNC file — DXF (mm)', actions.exportDxf, SHIFT + MOD + 'E'],
@@ -274,6 +276,7 @@ document.addEventListener('keydown', (e) => {
     const run = (fn) => { e.preventDefault(); fn(); };
     if (k === 's') return run(e.shiftKey ? () => actions.saveAs() : actions.save);
     if (k === 'o') return run(actions.openDocument);
+    if (k === 'p') return run(actions.printView);
     if (k === 'e') return run(e.shiftKey ? actions.exportDxf : actions.exportCnc);
     if (k === 'i') return run(actions.importSvg);
     if (k === 'n' && e.shiftKey) return run(addLayer);
@@ -320,6 +323,9 @@ document.addEventListener('keydown', (e) => {
   if (k === 'd') return canvas.setShowDims(!app.showDims);
   if (e.key === ']') return actions.reorder('front');
   if (e.key === '[') return actions.reorder('back');
+  if (app.view === '3d' && (k === 'v' || k === 'h')) {        // 3D: arrow = rotate, hand = move
+    return import('./preview3d.js').then(m => m.setNavMode(k === 'h' ? 'move' : 'rotate'));
+  }
   if (TOOL_KEYS[k] && !e.altKey) canvas.setTool(TOOL_KEYS[k]);
 });
 document.addEventListener('keyup', (e) => { if (e.key === ' ') canvas.setSpace(false); });

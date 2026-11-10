@@ -34,6 +34,21 @@ function grain(g, w, h, r, { lines = 110, dark = 150, wave = 8, alpha = 0.25, ba
   }
 }
 
+// Soft light/dark patches: the colour variation of a real veneer (wraps at the tile edges)
+function blotch(g, w, h, r, n = 14) {
+  for (let i = 0; i < n; i++) {
+    const x = r() * w, y = r() * h, rx = w * (0.15 + r() * 0.35), ry = h * (0.03 + r() * 0.08);
+    const light = r() < 0.5;
+    for (const dx of [-w, 0, w]) for (const dy of [-h, 0, h]) {
+      const gr = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+      gr.addColorStop(0, light ? 'rgba(255,255,255,0.10)' : 'rgba(110,110,110,0.08)');
+      gr.addColorStop(1, 'rgba(128,128,128,0)');
+      g.save(); g.translate(x + dx, y + dy); g.scale(rx, ry);
+      g.fillStyle = gr; g.beginPath(); g.arc(0, 0, 1, 0, 6.3); g.fill(); g.restore();
+    }
+  }
+}
+
 function speckle(g, w, h, r, { n = 5000, alpha = 0.15, base = 240, size = 2 } = {}) {
   g.fillStyle = grey(base); g.fillRect(0, 0, w, h);
   for (let i = 0; i < n; i++) {
@@ -68,7 +83,7 @@ function plies(count) {
 const flat = (g, w, h) => { g.fillStyle = grey(250); g.fillRect(0, 0, w, h); };
 
 const LOOKS = {
-  plywood: { roughness: 0.8, metalness: 0, bump: 0.25, face: (g, w, h, r) => grain(g, w, h, r, { lines: 150, dark: 165, alpha: 0.13, width: 1.2 }), edge: 'plies' },
+  plywood: { roughness: 0.8, metalness: 0, bump: 0.25, face: (g, w, h, r) => { grain(g, w, h, r, { lines: 190, dark: 150, alpha: 0.2, width: 1.4, base: 238 }); blotch(g, w, h, r); }, edge: 'plies' },
   wood:    { roughness: 0.7, metalness: 0, bump: 0.8,
              face: (g, w, h, r) => grain(g, w, h, r, { lines: 170, dark: 110, alpha: 0.35, wave: 4 }),
              edge: (g, w, h, r) => grain(g, w, h, r, { lines: 120, dark: 110, alpha: 0.3, wave: 1, base: 232 }) },

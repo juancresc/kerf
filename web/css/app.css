@@ -454,6 +454,14 @@ dialog:has(.connect) { max-width: min(760px, calc(100vw - 32px)); width: 760px; 
 .view3d { flex: 1; min-width: 0; display: flex; position: relative; background: #eef0f3; }
 .view3d-canvas { flex: 1; min-width: 0; position: relative; }
 .view3d-canvas canvas { display: block; width: 100%; height: 100%; }
+.view3d-canvas.nav-move canvas { cursor: grab; }
+.view3d-canvas.nav-move canvas:active { cursor: grabbing; }
+.view3d-tools {
+  position: absolute; top: 12px; right: 12px; z-index: 2;
+  display: flex; flex-direction: column; gap: 2px; padding: 4px;
+  background: var(--bar-2); border: 1px solid #111; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.25);
+}
+.view3d-tools .sep { height: 1px; background: rgba(255,255,255,.18); margin: 3px 4px; }
 .view3d-panel {
   position: absolute; left: 12px; top: 12px; z-index: 3; min-width: 250px; max-width: 320px;
   background: rgba(255,255,255,.95); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
@@ -545,3 +553,35 @@ dialog.wide { min-width: 560px; }
 #content .hover-hl { stroke: var(--accent) !important; stroke-width: 3px !important; vector-effect: non-scaling-stroke; }
 .connect-code[data-block="text"] pre { max-height: 30vh; }
 .connect-prompt .connect-code pre { max-height: 24vh; background: #22303f; }
+
+/* 3D panel: Structure (weight, centre of mass, stability) */
+.p3-structure { border-top: 1px solid var(--border); margin-top: 8px; padding-top: 8px; }
+.p3-structure .st-verdict { font-weight: 600; font-size: 13px; }
+.p3-structure .st-verdict.ok { color: #16a34a; }
+.p3-structure .st-verdict.bad { color: #dc2626; }
+.p3-structure .st-msg { margin: 4px 0 8px; line-height: 1.35; }
+.p3-structure .st-stats { display: flex; gap: 14px; margin-bottom: 8px; }
+.p3-structure .st-stats div { display: flex; flex-direction: column; }
+.p3-structure .st-stats b { font: 600 13px var(--mono); }
+.p3-structure .st-stats span, .p3-structure .muted { color: var(--muted); font-size: 10.5px; }
+.p3-structure .st-table { width: 100%; border-collapse: collapse; font-size: 11px; margin-bottom: 8px; }
+.p3-structure .st-table th { text-align: left; font-weight: 500; color: var(--muted); font-size: 10px; }
+.p3-structure .st-table td, .p3-structure .st-table th { padding: 2px 4px 2px 0; }
+.p3-structure .st-table td:not(:first-child) { font-family: var(--mono); white-space: nowrap; }
+.p3-structure .st-table tr.weak td { color: #b45309; font-weight: 600; }
+.p3-structure .st-table tr.bad td { color: #dc2626; font-weight: 600; }
+.p3-structure .st-sub { font-weight: 600; margin-bottom: 4px; }
+.p3-structure .st-load { display: flex; justify-content: space-between; }
+.p3-structure .st-loads .row { display: flex; gap: 6px; align-items: center; margin: 4px 0 8px; }
+.p3-structure .st-loads input { width: 64px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; font: 11px var(--mono); }
+.p3-structure .st-parts summary { cursor: pointer; margin-bottom: 4px; }
+.p3-structure .st-parts a { color: inherit; }
+.p3-structure .st-strength { margin-bottom: 8px; }
+.p3-structure .st-verdict-sm { font-weight: 500; font-size: 11px; }
+.p3-structure .st-verdict-sm.ok { color: #16a34a; }
+.p3-structure .st-verdict-sm.bad, .p3-structure .st-bad { color: #dc2626; }
+.p3-structure .st-tag { font-size: 9.5px; padding: 0 4px; border-radius: 3px; color: #fff; background: #64748b; }
+.p3-structure tr.st-breaks .st-tag { background: #dc2626; }
+.p3-structure tr.st-overloaded .st-tag { background: #f97316; }
+.p3-structure tr.st-sags .st-tag { background: #ca8a04; }
+.p3-structure tr.st-breaks td, .p3-structure tr.st-overloaded td { font-weight: 600; }

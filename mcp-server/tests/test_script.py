@@ -161,3 +161,19 @@ def test_script_and_check_endpoints(srv):
     assert json.loads(r.body)["ok"] is True
     r = asyncio.run(srv.get_check(make_mocked_request("GET", "/api/check?tab=nope")))
     assert r.status == 400
+
+
+def test_drawing_records_its_script(wired, tmp_path, monkeypatch):
+    script = tmp_path / "data" / "shelf" / "make.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("# shelf generator\n")
+    monkeypatch.setenv("SHELF_W", "600")
+    g = k.generator(str(script), env=("SHELF_W", "UNSET_VAR"))
+    assert g["path"] == "shelf/make.py" and g["source"] == "# shelf generator\n" and len(g["sha256"]) == 64
+    assert g["command"].startswith("SHELF_W=600 python3 shelf/make.py")
+    d = k.Drawing("Shelf", script=str(script))
+    d.part("A", k.rect(0, 0, 100, 100), label=False)
+    doc = wired.store.get_tab(d.send()).doc
+    assert doc.generator["path"] == "shelf/make.py" and doc.generator["source"] == "# shelf generator\n"
+    d = k.Drawing("Shelf", script=False)
+    assert not any(o["op"] == "set_generator" for o in d.ops)

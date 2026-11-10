@@ -328,6 +328,24 @@ def test_parts_export_per_entity(store):
     assert 'width="100.000mm"' in svg and "translate(-500.000, -300.000)" in svg and "label" not in svg
 
 
+def test_part_material_overrides_the_project_material(store):
+    [a] = store.apply([{"op": "add_element", "tag": "rect", "layer": "CUT_OUTSIDE",
+                        "attrs": {"x": 0, "y": 0, "width": 100, "height": 40}}])
+    [g] = store.apply([{"op": "group", "items": [a], "name": "Top"}])
+    store.apply([{"op": "update_group", "id": g, "assembly": {
+        "position": [0, 0, 0], "rotation": [0, 0, 0], "color": "#b5603a",
+        "material": {"type": "plywood", "name": "Cedro plywood", "junk": 1}}}])
+    asm = store.doc.group_by_id(g).assembly
+    assert asm["material"] == {"type": "plywood", "name": "Cedro plywood"} and asm["color"] == "#b5603a"
+    store.save("mat")                                            # survives the file
+    store.new()
+    store.open("mat")
+    assert store.doc.groups[0].assembly["material"]["name"] == "Cedro plywood"
+    with pytest.raises(DocError, match="material type"):
+        store.apply([{"op": "update_group", "id": store.doc.groups[0].id,
+                      "assembly": {"position": [0, 0, 0], "material": {"type": "unobtainium"}}}])
+
+
 def test_sheet_export_one_file_per_sheet(store):
     from export import sheet_files, sheets_zip
     import ezdxf, ezdxf.bbox, zipfile
@@ -546,3 +564,28 @@ def test_element_name_roundtrip(store):
         {"id": "el-1", "tag": "rect", "layer": "CUT_OUTSIDE", "attrs": {}, "name": ["bad"] * 100}]})
     d.sanitize()
     assert len(d.elements[0].name) <= 80
+
+
+def test_generator_is_stored_validated_and_kept_out_of_state(tmp_path):
+    from document import to_native, from_native, clean_generator
+    s = Store(tmp_path)
+    gen = {"path": "desk/generate.py", "command": "DESK_LAYOUT=6090  python3 desk/generate.py",
+           "sha256": "A" * 64, "generated": "2026-09-30T15:53:41+00:00", "source": "print('hi')\n", "run": True}
+    s.apply([{"op": "set_generator", "generator": gen}])
+    g = s.doc.generator
+    assert g == {"path": "desk/generate.py", "command": "DESK_LAYOUT=6090 python3 desk/generate.py",
+                 "sha256": "a" * 64, "generated": "2026-09-30T15:53:41+00:00", "source": "print('hi')\n"}
+    assert from_native(to_native(s.doc)).generator == g
+    st = s.state()["doc"]["generator"]
+    assert "source" not in st and st["source_lines"] == 2 and st["path"] == "desk/generate.py"
+    s.apply([{"op": "clear"}])
+    assert s.doc.generator == g                     # a script's rebuild clears the drawing, not the record
+    for bad in ("../etc/passwd", "/abs/x.py", "a/../b.py", "x.py\nrm", ""):
+        assert clean_generator({"path": bad}) is None
+        with pytest.raises(DocError, match="Invalid generator"):
+            s.apply([{"op": "set_generator", "generator": {"path": bad}}])
+    assert clean_generator({"path": "x.py", "sha256": "zz", "generated": "<script>"}) == {"path": "x.py", "command": ""}
+    s.apply([{"op": "set_generator", "generator": None}])
+    assert s.doc.generator is None
+    s.undo()
+    assert s.doc.generator == g

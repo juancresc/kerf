@@ -118,6 +118,7 @@ document.getElementById('connect-claude').addEventListener('click', () => connec
 
 // Edit links in the 3D panel
 document.addEventListener('rename-project', () => actions.renameProject());
+document.addEventListener('print-view', () => actions.printView());
 document.addEventListener('material-dialog', () => actions.materialDialog());
 document.addEventListener('edit-sliders', () => {
   if (app.sideHidden) document.dispatchEvent(new Event('toggle-side'));

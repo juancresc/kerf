@@ -5,6 +5,7 @@ Both front ends are thin wrappers over one `Store` (see store.py), which owns th
 import asyncio
 import base64
 import functools
+import hashlib
 import json
 import logging
 import mimetypes
@@ -75,12 +76,15 @@ INSTRUCTIONS = f"""Kerf — a CNC design editor shared with the user (they see e
 - Draw parts anywhere, then arrange_parts packs them onto stock sheets (default: the material's
   sheet, 2440 × 1220) and draws the sheets. Their 3D placement doesn't change.
 - Verify with numbers first: check_cnc (cut problems, overlapping/too-close parts, off-sheet) and
-  describe_assembly (every part's world box in mm, overlaps). Then take_screenshot 2d / 3d.
+  describe_assembly (every part's world box in mm, overlaps), describe_structure (weight, centre
+  of mass, will it tip over). Then take_screenshot 2d / 3d.
 - Shapes: add_slot (round-ended), add_rounded_rect, add_outline (a radius per corner),
   fillet_corners and add_dogbones (Ø = material tool) instead of writing arc path data by hand.
 - More than ~5 parts or anything parametric: write a Python script with kerf_script (get_guide scripts).
 - Tools act on the active tab (list_tabs / switch_tab). get_selection = what the user selected.
 - Name the project (set_project_name); after save_document give the share link {EDITOR_URL}/?open=<file>.
+- A project made by a script (get_document_info shows "generator"): change the script and re-run it,
+  not the drawing, or the next run wipes your edit. get_generator shows its stored source.
 - Never discard the user's unsaved work or close their tabs without asking."""
 try:
     from mcp.server.transport_security import TransportSecuritySettings
@@ -127,10 +131,30 @@ Ids = list[str] | str          # tool arguments: ["el-1", "g-2"] or "el-1,g-2"
 Obj = dict | str               # a JSON object, or the same as a JSON string
 
 
+def generator_info(doc, with_source: bool = False) -> dict | None:
+    """The stored generator of a project + whether the script in data/ still matches it:
+    status "same" / "changed" / "missing" (not in data/) / "unknown" (no hash stored)."""
+    g = doc.generator
+    if not g:
+        return None
+    out = {k: v for k, v in g.items() if k != "source"}
+    out["has_source"] = "source" in g
+    path = (DATA_DIR / g["path"]).resolve()
+    if DATA_DIR.resolve() not in path.parents or not path.is_file():
+        out["status"] = "missing"
+    elif not g.get("sha256"):
+        out["status"] = "unknown"
+    else:
+        out["status"] = "same" if hashlib.sha256(path.read_bytes()).hexdigest() == g["sha256"] else "changed"
+    if with_source:
+        out["source"] = g.get("source", "")
+    return out
+
+
 def summary() -> dict:
     s = store.state(include_doc=False)
     d = store.doc
-    return {"tab": s["active"], "file": s["file"], "name": s["name"], "title": d.title, "dirty": s["dirty"],
+    return {"generator": generator_info(d), "tab": s["active"], "file": s["file"], "name": s["name"], "title": d.title, "dirty": s["dirty"],
             "width_mm": d.width, "height_mm": d.height, "elements": len(d.elements),
             "entities": len(d.groups), "layers": [l.name for l in d.layers], "material": d.material,
             "can_undo": s["can_undo"], "can_redo": s["can_redo"], "open_tabs": store.list_tabs()}
@@ -143,6 +167,14 @@ def get_document_info() -> str:
     """Current document: project name (title) and file name, unsaved changes, size in mm (1 unit = 1 mm), layer names,
     element count, undo/redo availability."""
     return json.dumps(summary())
+
+
+@tool
+def get_generator() -> str:
+    """The script that generated the active project (path, command, when, whether data/<path> still
+    matches the stored copy) and its stored source. Edit and re-run that script instead of the drawing."""
+    info = generator_info(store.doc, with_source=True)
+    return json.dumps(info or {"generator": None, "note": "This project wasn't made by a script (or it wasn't recorded)."})
 
 
 @tool
@@ -265,7 +297,7 @@ def set_project_name(name: str) -> str:
 @tool
 def set_material(name: str = "", type: str = "", thickness: float = 0, color: str = "",
                  sheet_width: float = 0, sheet_height: float = 0, tool_diameter: float = 0,
-                 notes: str | None = None) -> str:
+                 notes: str | None = None, density: float = 0) -> str:
     """Material & stock for the project. Only given fields change.
 
     Args:
@@ -275,10 +307,12 @@ def set_material(name: str = "", type: str = "", thickness: float = 0, color: st
         color: #rrggbb used by the 3D preview.
         sheet_width / sheet_height: stock sheet size, mm.
         tool_diameter: end mill diameter, mm.
+        density: kg/m³ for weights (describe_structure); omitted = guessed from the name/type
+            (birch ply ≈ 680, MDF 750, pine 520, acrylic 1190, aluminium 2700, steel 7850).
     """
     m = {k: v for k, v in (("name", name), ("type", type), ("thickness", thickness), ("color", color),
                            ("sheet_width", sheet_width), ("sheet_height", sheet_height),
-                           ("tool_diameter", tool_diameter)) if v}
+                           ("tool_diameter", tool_diameter), ("density", density)) if v}
     if notes is not None:
         m["notes"] = notes
     store.apply([{"op": "set_material", "material": m}])
@@ -557,6 +591,13 @@ def update_group(group_id: str, name: str = "", qty: int = 0, assembly: Obj | No
              "position": [x,y,z],        # where the part's local origin goes, world mm
              "thickness": 18,            # optional: omit for sheet parts to follow the material
              "color": "#e3c592", "move": {"param": "lift", "axis": [0,1,0]},
+             "material": {"type": "metal", "name": "Steel"},   # optional: this part's own look
+                                         # (plywood|wood|board|plastic|metal|foam|other) instead of
+                                         # the project material, e.g. hardware, a cedro desktop;
+                                         # optional "density" kg/m³ for its weight
+             "mass": 4.5,                # optional: real weight in kg (motors, casters, bought
+                                         # parts); else volume × density
+             "capacity": 60,             # optional: kg rating of a caster / foot
              "matrix": [a,b,c,d,e,f]}    # optional: omitted = keep the current one, or for a new
                                          # placement the drawing's bottom-left corner, y up;
                                          # "auto" = recompute that from the drawing now
@@ -752,7 +793,7 @@ def apply_ops(ops: list | str, label: str = "") -> str:
     move{items,dx,dy} · transform{items,transform} (entities keep their 3D placement) ·
     arrange{sheet_width,sheet_height,margin,gap,rotate,notes} (see arrange_parts) ·
     add_layer{name,color,line_style,export,description,depth,exist_ok} · update_layer{name,...} ·
-    remove_layer{name,move_to} · set_size{width,height} · set_material{material} · set_title{title} ·
+    remove_layer{name,move_to} · set_size{width,height} · set_material{material} · set_title{title} · set_generator{generator} ·
     set_params{params} · import_svg{svg,layer} · clear.
     Example: a plate with two holes as one part, placed flat in 3D:
     [{"op":"add_element","as":"plate","tag":"rect","layer":"CUT_OUTSIDE","attrs":{"x":0,"y":0,"width":300,"height":200,"rx":10,"fill":"none"}},
@@ -922,6 +963,36 @@ def describe_assembly(threshold: float = 20) -> str:
     return json.dumps(layout.assembly_report(store.doc, threshold))
 
 
+@tool
+def describe_structure(params: Obj | None = None, loads: list | str | None = None,
+                       push_height: float | None = None) -> str:
+    """Weight and stability of the 3D assembly: each placed part's weight (outline − holes −
+    pockets × thickness × density, or its assembly.mass), the total, the centre of mass, and
+    whether it stands: the footprint on the floor, the margin from the centre of mass to each
+    footprint edge, the tip angle and the sideways push (kgf / N) at push_height that tips it.
+    `strength`: every horizontal panel as a beam between its supports: sag, % of breaking stress,
+    safe extra load, status ok / sags / overloaded / breaks / unsupported; casters with
+    assembly.capacity (kg) checked against their share of the weight.
+
+    Args:
+        params: slider values, e.g. {"lift": 400}. Omitted: the model is checked with every slider
+            at its minimum AND at its maximum (e.g. a desk at sitting and standing height).
+        loads: extra weights, e.g. [{"part": "Desktop", "kg": 40}] (on top of that part, centred)
+            or [{"at": [x, y, z], "kg": 20, "label": "monitor"}] (world mm).
+        push_height: height (world Y, mm) of the sideways push; default the top of the model.
+    """
+    import structure
+    loads = parse_json(loads, "loads") if loads not in (None, "") else None
+    params = parse_json(params, "params") if params not in (None, "") else None
+    doc = store.doc
+    if params is not None or not any(g.assembly and g.assembly.get("move") for g in doc.groups):
+        return json.dumps(structure.structure_report(doc, params, loads, push_height))
+    lo = structure.structure_report(doc, {p["name"]: p["min"] for p in doc.params}, loads, push_height)
+    hi = structure.structure_report(doc, {p["name"]: p["max"] for p in doc.params}, loads, push_height)
+    return json.dumps({"at_min": lo, "at_max": hi,
+                       "note": "sliders at their minimum and at their maximum; pass params for another position"})
+
+
 @mcp.prompt()
 def design_part(description: str) -> str:
     """Design a CNC part in Kerf from a description."""
@@ -953,7 +1024,7 @@ def get_guide(topic: str = "") -> str:
 
     Args:
         topic: Optional section to return instead of the whole guide, matched against the headings:
-            workflow, layers, placement, cnc, svg, children, http, scripts.
+            workflow, layers, placement, structure, cnc, svg, children, http, scripts.
     """
     if not topic:
         return GUIDE_TEXT
@@ -1281,9 +1352,25 @@ async def get_check(request):
 
 
 @api
+async def get_generator_http(request):
+    """The generator of a tab (?tab=): path, command, status and the stored source."""
+    return web.json_response(generator_info(store.get_tab(request.query.get("tab") or None).doc, with_source=True))
+
+
+@api
 async def get_assembly(request):
     """describe_assembly for a tab (?tab=, default the active one)."""
     return web.json_response(layout.assembly_report(store.get_tab(request.query.get("tab") or None).doc))
+
+
+@api
+async def post_structure(request):
+    """describe_structure for a tab: {tab, params, loads, push_height} (all optional)."""
+    import structure
+    body = await request.json()
+    doc = store.get_tab(body.get("tab") or None).doc
+    return web.json_response(structure.structure_report(doc, body.get("params"), body.get("loads"),
+                                                        body.get("push_height")))
 
 
 async def get_guide_http(request):
@@ -1402,6 +1489,8 @@ def run_http_server():
     r.add_get("/api/script", get_script)
     r.add_get("/api/check", get_check)
     r.add_get("/api/assembly", get_assembly)
+    r.add_post("/api/structure", post_structure)
+    r.add_get("/api/generator", get_generator_http)
     r.add_static("/", WEB_DIR)
 
     loop = asyncio.new_event_loop()

@@ -31,6 +31,7 @@ Kerf is a CAD-style editor for CNC-cut parts: flat parts cut from sheet material
 6. **Check with numbers, then look:**
    - `check_cnc`: open contours, small holes, parts overlapping or closer than the tool, parts off the sheets, parts left out of 3D;
    - `describe_assembly`: every part's world box in mm. Compare it with where the part should be (e.g. a shelf at Y 300–318). Most 3D mistakes are a wrong rotation or position, and they show up here;
+   - `describe_structure` for anything that stands on the floor (see Structure): weight, centre of mass, and whether it tips over;
    - `take_screenshot` with `view="2d"`, then `"3d"` and `"3d-exploded"` (needs the editor open in a browser).
 7. **Finish:**
    - notes: `arrange_parts(notes=[...])` writes the cut order, hardware list and assembly/safety notes under the sheets;
@@ -83,6 +84,16 @@ Each entity's `assembly` has these fields:
 **Fixing entities:** `move_to_entity(ids, entity)` (op `set_group {items, group}`) adds shapes or entities to an entity, or takes them out when `entity` is empty. Entities left empty disappear.
 
 **Naming shapes:** single shapes can carry a `name` too ("hinge hole", "cable slot"): `add_element{…, name}`, `update_element{id, name}` (`""` clears it), `find_elements(name=…)`. Names are labels for the editor and for you, never exported to CNC.
+
+## Structure (weight, stability)
+
+`describe_structure` (3D panel → **Structure**, `kerf_script.structure(tab, …)`) weighs the assembly and checks it won't fall over:
+- **Weight per part** = (outline − holes) × thickness − pockets, × density. The density comes from `set_material(density=…)` in kg/m³; without one it's guessed from the material name or type (birch ply ≈ 680, MDF 750, pine 520, acrylic 1190, aluminium 2700, steel 7850). A part with its own `assembly.material` can carry its own `density`.
+- **Bought parts:** give them `assembly.mass` (kg), e.g. motors, casters, boxes, a monitor. A HARDWARE part with neither a mass nor a material of its own counts as 0 kg and is listed in `unweighed_hardware`.
+- **Stability:** the floor is the model's lowest point, and whatever touches it makes the footprint. The result gives the margin from the centre of mass to each footprint edge, the **tip angle** (how far it can lean) and the **tip force** (the sideways push at `push_height`, default the top, that tips it, in kgf and N).
+- **Sliders:** without `params`, a model with moving parts is checked at every slider's minimum *and* maximum (a desk sitting and standing). `loads=[{"part": "Desktop", "kg": 40}]` puts weight on top of a part; `{"at": [x, y, z], "kg": …}` puts it at a point.
+- **Strength** (`strength` in the result): every horizontal panel is checked as a beam between the parts holding it up from below (sides, legs, rails). It gets its clear span, its own weight and the loads on it (plus bought parts resting on it, by their `mass`) as one weight in the middle, the worst case. For each panel you get the sag, the stress as a % of breaking, `safe_load_kg` (how much more fits in the middle) and a status: `ok`, `sags` (more than span/200), `overloaded` (over 50% of breaking, i.e. under a ×2 safety factor), `breaks`, or `unsupported`. Casters and feet with `assembly.capacity` (kg rating) are checked against the weight shared between them. Joints, screws and inserts are **not** checked: a dado or insert usually gives way before the panel breaks.
+- Rules of thumb: furniture people lean on should take ≥ 10 kgf at the top, or be fixed to the wall. Children's furniture and tall shelves should always be fixed to the wall. A tip angle under ~10° feels wobbly.
 
 ## CNC rules of thumb (18 mm plywood)
 
@@ -168,6 +179,7 @@ tab = d.run()      # python3 shelf.py [tab] [--dry] [--save shelf/shelf]
 - **`Drawing`** collects the ops: `layer(...)` (safe to re-run), `part(...)` (outline, `holes`, `pockets={layer: [...]}`, `circles=[((x, y), Ø[, layer])]`, a name label, `qty`, and the 3D placement from `rotation` / `position`, plus `thickness`, `color`, `move`), `op({...})` for anything else, `arrange(notes, sheet=(w, h))`.
 - **`run()`** is the command line: no argument = a new tab (the user's active tab stays active); a tab id (`t3`) = rebuild that tab in place, as one undo step; `--dry` = local checks only; `--save file` = save the .kerf. It prints the sheets and `check_cnc`.
 - **Keep every change in the script** (holes, engravings, tweaks). An edit made only in the editor is lost the next time the script runs. Cache the output of optional tools (e.g. fontTools glyph outlines for engraved text) next to the script, so it still runs without them.
+- **The project remembers its script.** `Drawing` stores the running script in the .kerf (`generator`: path relative to the data folder, command, SHA-256, time, a copy of the source; `Drawing(..., script=False)` to skip). The editor shows it under Document → Generator and says when the file in `data/` no longer matches. `get_generator` / `GET /api/generator` return it. It is only a record: nothing runs it. A script that writes the .kerf itself sets `doc.generator = clean_generator(k.generator(__file__, env=("MY_VAR",)))`.
 - **Draw parts in their own coordinates, y up**, the way the 3D recipe expects (side panel = depth × height, flat board = width × depth with the front at y = 0). Their spot on the drawing doesn't matter: `arrange()` packs them and the 3D placement follows. `at=(X, Y), turn=90` places a part by hand instead.
 - **Outlines:** `build(vertices, corners)`: `("fillet", r)` rounds a corner, `("dog", r)` adds a dog-bone, `auto_dog=r` dog-bones every concave corner (tenon shoulders), and an `("arc", centre, via)` item between two vertices makes that edge an arc. `circle(cx, cy, r)` is a round outline, `slot(x1, y1, x2, y2, width)` a round-ended slot, `rounded_rect(x0, y0, x1, y1, r)` a rectangle with round corners. Arc flags are computed for you; never write them by hand. Corner indices count vertices only, not arc items.
 - **Check before you look:** `k.bounds(outline)` must match the size you meant (an off-by-one corner index or a wrong arc shows up here). `d.expect(name, box)` / `d.world_box(name)` confirm each part's world X/Y/Z range before anything is sent. Then `check_cnc`, `describe_assembly` and screenshots.

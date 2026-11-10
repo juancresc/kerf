@@ -379,6 +379,15 @@ function renderDocumentInfo() {
       <label>Elements</label><span class="val">${doc.elements.length}</span>
     </div>
     <div class="btn-row"><button class="btn" data-doc-size>Change size…</button><button class="btn" data-fit>Fit to window</button></div>
+    ${doc.generator ? `<h3>Generator</h3>
+      <p class="hint">Made by a script. Change the script and run it again: edits made here are lost on the next run.</p>
+      <div class="kv">
+        <label>Script</label><span class="val" style="font-family:var(--mono);overflow-wrap:anywhere">data/${esc(doc.generator.path)}</span>
+        ${doc.generator.command ? `<label>Command</label><span class="val" style="font-family:var(--mono);font-size:11px;overflow-wrap:anywhere">${esc(doc.generator.command)}</span>` : ''}
+        ${doc.generator.generated ? `<label>Generated</label><span class="val">${esc(new Date(doc.generator.generated).toLocaleString())}</span>` : ''}
+        <label>On disk</label><span class="val" data-gen-status><span class="muted">checking…</span></span>
+      </div>
+      ${doc.generator.source_lines ? '<div class="btn-row"><button class="btn" data-gen-source>View stored source</button></div>' : ''}` : ''}
     ${active ? `<h3>Active layer: ${esc(active.name)}</h3><p class="hint">${esc(active.description) || 'No description. Open the layer details (▸) to add one.'}</p>` : ''}
     <h3>CNC export</h3>
     <p class="hint">${counts.filter(([l]) => l.export).map(([l, n]) => `${esc(l.name)} (${n})`).join(', ') || 'nothing'} will be exported (hidden layers too — visibility only affects the view).
@@ -394,6 +403,7 @@ function renderDocumentInfo() {
       <label>Sheet</label><div class="pair"><span class="unit" data-unit="mm"><input type="number" step="any" data-m="sheet_width" value="${m.sheet_width}"></span>
         <span class="unit" data-unit="mm"><input type="number" step="any" data-m="sheet_height" value="${m.sheet_height}"></span></div>
       <label>Tool Ø</label><span class="unit" data-unit="mm"><input type="number" step="any" data-m="tool_diameter" value="${m.tool_diameter}"></span>
+      <label>Density</label><span class="unit" data-unit="kg/m³"><input type="number" step="any" min="0" data-m="density" value="${m.density ?? ''}" placeholder="auto" title="For weights in 3D → Structure. Empty = from the material name/type (birch ply ≈ 680, MDF 750, pine 520)"></span>
       <label>Notes</label><textarea data-m="notes" placeholder="Supplier, grain direction, feeds…">${esc(m.notes || '')}</textarea>
     </div>
     <h3>3D sliders</h3>
@@ -450,11 +460,43 @@ function renderDocumentInfo() {
   }));
   inspector.querySelector('[data-m-preset]').addEventListener('change', (e) => {
     const p = PRESETS[+e.target.value];
-    if (p) setMat({ name: p.name.replace(/ \d+.*$/, ''), type: p.type, thickness: p.thickness, color: p.color }, 'Material preset');
+    if (p) setMat({ name: p.name.replace(/ \d+.*$/, ''), type: p.type, thickness: p.thickness, color: p.color, density: '' }, 'Material preset');
   });
   inspector.querySelector('[data-bg-remove]')?.addEventListener('click', actions.removeBackground);
+  if (doc.generator) {
+    const tab = s.active;
+    generatorInfo(tab, doc.generator.sha256).then(g => {
+      const el = inspector.querySelector('[data-gen-status]');
+      if (!el || !g) return;
+      el.innerHTML = {
+        same: 'matches the stored copy',
+        changed: '<span style="color:#b45309">changed since this was generated: run it again</span>',
+        missing: '<span class="muted">not in the data folder (the stored copy is in the file)</span>',
+        unknown: '<span class="muted">no fingerprint stored</span>',
+      }[g.status] || esc(g.status);
+    });
+    inspector.querySelector('[data-gen-source]')?.addEventListener('click', async () => {
+      const g = await generatorInfo(tab, doc.generator.sha256, true);
+      modal({ title: `Generator: ${doc.generator.path}`,
+              html: `<div class="guide"><p class="hint">The copy stored in this project when it was generated (read-only, never run).</p>
+                <pre style="margin:0;padding:12px 14px;border-radius:8px;background:#1e1e1e;color:#e6e6e6;font:11.5px/1.5 var(--mono);white-space:pre;overflow:auto">${esc(g?.source || '')}</pre></div>`,
+              buttons: [{ label: 'Close', value: true, kind: 'primary' }] });
+    });
+  }
   inspector.querySelector('[data-bg-opacity]')?.addEventListener('change', (e) =>
     api.ops([{ op: 'set_background_opacity', opacity: +e.target.value }], 'Background opacity'));
+}
+
+// GET /api/generator for a tab: the on-disk status is cached briefly (the inspector re-renders often)
+let generatorCache = { key: '', at: 0, value: null };
+async function generatorInfo(tab, sha, fresh = false) {
+  const key = `${tab}:${sha}`;
+  if (!fresh && generatorCache.key === key && Date.now() - generatorCache.at < 15000) return generatorCache.value;
+  try {
+    const r = await fetch('/api/generator?tab=' + encodeURIComponent(tab));
+    generatorCache = { key, at: Date.now(), value: r.ok ? await r.json() : null };
+  } catch { generatorCache = { key, at: Date.now(), value: null }; }
+  return generatorCache.value;
 }
 
 // Re-render the inspector when state changes, but never while the user is typing in it
@@ -580,6 +622,11 @@ function renderGroupInspector(g, sel) {
       <label>Rotation °</label><div class="pair" style="grid-template-columns:1fr 1fr 1fr">${[0, 1, 2].map(i => `<input type="number" step="any" data-a="rotation.${i}" value="${num(a.rotation?.[i])}" title="about ${'xyz'[i]}">`).join('')}</div>
       <label>Moves with</label><select data-a="move"><option value="">— fixed —</option>${params.map(p =>
         `<option value="${esc(p.name)}" ${a.move?.param === p.name ? 'selected' : ''}>${esc(p.label || p.name)}</option>`).join('')}</select>
+      <label>Material</label>${partMaterialSelect(a)}
+      <label>Weight</label><span class="unit" data-unit="kg"><input type="number" step="any" min="0" data-a="mass" value="${a.mass ?? ''}" placeholder="auto" title="Real weight for bought parts (motors, casters, boxes). Empty = volume × material density"></span>
+      <label>Rated load</label><span class="unit" data-unit="kg"><input type="number" step="any" min="0" data-a="capacity" value="${a.capacity ?? ''}" placeholder="—" title="Casters / feet: the load each one is rated for. 3D → Structure checks the weight shared between them"></span>
+      <label>Colour</label><div class="fill-row"><input type="color" data-a-color value="${esc(a.color || a.material && presetFor(a.material)?.color || app.doc.material?.color || '#e3c592')}">
+        ${a.color ? '<button class="link-btn" data-a-color-clear title="Use the material\'s colour">reset</button>' : '<span class="hint">material\'s</span>'}</div>
     </div>
     <p class="hint" style="margin-top:6px">World: X = width, Y = up, Z = toward you. The part's outline is extruded by its thickness (empty = the material's).</p>
     <div class="btn-row"><button class="btn" data-open3d>Open 3D preview</button><button class="btn danger" data-a-clear>Remove from 3D</button></div>`
@@ -608,9 +655,20 @@ function renderGroupInspector(g, sel) {
       next[k] = next[k] || [0, 0, 0];
       next[k][+i] = +inp.value || 0;
     } else if (key === 'thickness' && !(+inp.value > 0)) delete next.thickness;   // follow the material
+    else if ((key === 'mass' || key === 'capacity') && !(+inp.value > 0)) delete next[key];   // auto / none
     else next[key] = +inp.value || 0;
     upd({ assembly: next }, '3D placement');
   }));
+  const setLook = (fn, label) => { const next = JSON.parse(JSON.stringify(g.assembly || {})); fn(next); upd({ assembly: next }, label); };
+  inspector.querySelector('[data-a-mat]')?.addEventListener('change', e => setLook(next => {
+    if (e.target.value === 'custom') return;
+    const p = LOOKS[+e.target.value];
+    if (!p || e.target.value === '') { delete next.material; delete next.color; return; }   // back to the project's material
+    next.material = { type: p.type, name: baseName(p) };
+    next.color = p.color;
+  }, 'Part material'));
+  inspector.querySelector('[data-a-color]')?.addEventListener('change', e => setLook(next => { next.color = e.target.value; }, 'Part colour'));
+  inspector.querySelector('[data-a-color-clear]')?.addEventListener('click', () => setLook(next => { delete next.color; }, 'Part colour'));
   inspector.querySelector('[data-a-clear]')?.addEventListener('click', () => upd({ assembly: null }, 'Remove from 3D'));
   inspector.querySelector('[data-a-init]')?.addEventListener('click', () => {
     // Start as a flat board lying where it is on the sheet: sheet (x, y) → world (x, 0, y)
@@ -668,4 +726,26 @@ function contentRow(item) {
   return `<div class="ent-item" data-item="${esc(item)}"><span class="ent-sw" style="background:${esc(layer?.color || '#999')}"></span>
     <span class="ent-what">${e.name ? `<b>${esc(e.name)}</b>` : esc(e.tag)}</span><span class="ent-dim">${dim}</span>
     <span class="ent-layer">${esc(e.layer)}</span>${x}</div>`;
+}
+
+
+/** Presets as part looks: one per material (the thickness doesn't matter for the look). */
+const baseName = p => p.name.replace(/ \d+.*$/, '');
+const LOOKS = PRESETS.filter((p, i) => PRESETS.findIndex(q => baseName(q) === baseName(p) && q.type === p.type) === i);
+
+/** The preset a part material came from, if any. */
+function presetFor(m) {
+  return LOOKS.find(p => p.type === m.type && baseName(p) === m.name);
+}
+
+/** Material select for one part: the project's material, or a preset (its look and colour). */
+function partMaterialSelect(a) {
+  const own = a.material;
+  const current = own ? LOOKS.indexOf(presetFor(own)) : -1;
+  const project = app.doc.material?.name || 'project material';
+  return `<select data-a-mat title="How this part looks in 3D (its texture and colour); cutting uses the drawing only">
+    <option value="">— ${esc(project)} (project) —</option>
+    ${own && current < 0 ? `<option value="custom" selected>${esc(own.name || own.type)} · ${esc(own.type)}</option>` : ''}
+    ${LOOKS.map((p, i) => `<option value="${i}" ${i === current ? 'selected' : ''}>${esc(baseName(p))} · ${esc(p.type)}</option>`).join('')}
+  </select>`;
 }
